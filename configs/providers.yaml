@@ -1,0 +1,72 @@
+# Image Skill - Provider 配置
+# 所有 API Key 从 .env 读取，不在此文件中硬编码
+
+providers:
+  qwen:
+    name: "Qwen Image (阿里云百炼 DashScope)"
+    api_url: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    auth_env: "DASHSCOPE_API_KEY"
+    auth_type: "bearer"
+    models:
+      generate: "qwen-image-plus"
+      generate_hd: "qwen-image-max"
+      edit: "qwen-image-edit-plus"
+      edit_hd: "qwen-image-edit-max"
+    supports_reference_image: true
+    supports_negative_prompt: true
+    aspect_ratios:
+      - "1:1"    # 1328x1328
+      - "16:9"   # 1664x928
+      - "9:16"   # 928x1664
+      - "4:3"    # 1472x1104
+      - "3:4"    # 1104x1472
+      - "3:2"    # 1584x1056
+      - "2:3"    # 1056x1584
+    notes: "国内网络友好，支持中文 prompt，2512 版本人物真实感大幅提升"
+
+  gemini:
+    name: "Gemini (Google AI Studio / Nano Banana)"
+    auth_env: "GEMINI_API_KEY"
+    auth_type: "api_key_param"
+    models:
+      generate: "gemini-2.5-flash-image"
+      generate_hd: "gemini-3-pro-image-preview"
+    supports_reference_image: true
+    supports_transparent: true
+    max_size: "4096x4096"
+    notes: "参考图编辑能力强，成本低，适合高频测试"
+
+  seedream:
+    name: "Seedream 5.0 (即梦 AI / 火山引擎)"
+    auth_env: "SEEDREAM_API_KEY"
+    auth_type: "bearer"
+    models:
+      generate: "seedream-5-0-pro"
+    supports_reference_image: true
+    supports_multi_image_fusion: true
+    notes: "电商场景优化，多图融合能力"
+
+  omnimaas:
+    name: "OmniMaaS Gateway (product-shots 兼容)"
+    base_url_env: "OMNIMAAS_BASE_URL"
+    base_url_default: "https://api.omnimaas.com/v1"
+    auth_env: "OMNIMAAS_API_KEY"
+    auth_type: "bearer"
+    openai_compatible: true
+    models:
+      generate: "gemini-3-pro-image-preview"
+    supports_reference_image: true
+    notes: "product-shots 项目默认网关，OpenAI SDK 兼容"
+
+  openai_compatible:
+    name: "Generic OpenAI-compatible Gateway"
+    base_url_env: "PRODUCT_SHOTS_IMAGEGEN_BASE_URL"
+    auth_env: "PRODUCT_SHOTS_IMAGEGEN_API_KEY"
+    auth_type: "bearer"
+    openai_compatible: true
+    notes: "任意 OpenAI SDK 兼容的图片生成网关"
+
+# 默认 Provider 选择（可通过 .env 的 IMAGE_PROVIDER 覆盖）
+default_provider: "qwen"
+default_model: "qwen-image-plus"
+default_edit_model: "qwen-image-edit-plus"

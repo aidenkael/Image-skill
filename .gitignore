@@ -1,0 +1,51 @@
+# === Secrets ===
+.env
+*.key
+*.pem
+
+# === Outputs & Generated Images ===
+outputs/
+!outputs/.gitkeep
+
+# === Large Assets ===
+*.psd
+*.tif
+*.tiff
+*.exr
+
+# === ComfyUI ===
+comfyui/
+comfyui_cache/
+models/
+*.ckpt
+*.safetensors
+*.pt
+*.bin
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# === Node ===
+node_modules/
+.cache/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Temp ===
+tmp/
+temp/
+*.log
