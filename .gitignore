@@ -7,6 +7,13 @@
 outputs/
 !outputs/.gitkeep
 
+# === Test Sample Images (supplier product photos) ===
+tests/samples/*.jpg
+tests/samples/*.jpeg
+tests/samples/*.png
+tests/samples/*.webp
+tests/samples/*.bmp
+
 # === Large Assets ===
 *.psd
 *.tif
