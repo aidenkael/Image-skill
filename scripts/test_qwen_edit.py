@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Line B: Qwen Image Edit 直接测试脚本
-通过 DashScope API 调用 qwen-image-edit-plus，
+Line B: Qwen Image 测试脚本
+通过 DashScope API 调用 qwen-image-3.0-pro（I2I 模式），
 将商品参考图 + 场景 Prompt → 生成电商场景图。
 
 用法:
@@ -35,6 +35,8 @@ def load_env():
 load_env()
 
 DASHSCOPE_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+# Token Plan 专用端点（如使用 sk-sp-... 凭证）:
+# DASHSCOPE_API_URL = "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
 
 def image_to_base64_url(image_path: str) -> str:
@@ -48,8 +50,8 @@ def image_to_base64_url(image_path: str) -> str:
     return f"data:{mime};base64,{b64}"
 
 
-def call_qwen_image_edit(image_path: str, prompt: str, model: str = "qwen-image-edit-plus", size: str = "1024*1024") -> dict:
-    """调用 Qwen Image Edit API"""
+def call_qwen_image_edit(image_path: str, prompt: str, model: str = "qwen-image-3.0-pro", size: str = "1024*1024") -> dict:
+    """调用 Qwen Image 3.0 Pro API (I2I 模式)"""
     api_key = os.environ.get("DASHSCOPE_API_KEY")
     if not api_key:
         print("ERROR: DASHSCOPE_API_KEY 未设置。请在 .env 中配置。")
@@ -71,10 +73,12 @@ def call_qwen_image_edit(image_path: str, prompt: str, model: str = "qwen-image-
             ]
         },
         "parameters": {
-            "size": size,
-            "n": 1
+            "n": 1,
+            "prompt_extend": True
         }
     }
+    if size:
+        payload["parameters"]["size"] = size
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -110,7 +114,7 @@ def main():
     parser = argparse.ArgumentParser(description="Qwen Image Edit 测试")
     parser.add_argument("--image", required=True, help="商品原图路径")
     parser.add_argument("--prompt", required=True, help="编辑指令/Prompt")
-    parser.add_argument("--model", default="qwen-image-edit-plus", help="模型名称")
+    parser.add_argument("--model", default="qwen-image-3.0-pro", help="模型名称")
     parser.add_argument("--size", default="1024*1024", help="输出尺寸 (如 1024*1024)")
     parser.add_argument("--output", default=None, help="输出路径")
     args = parser.parse_args()
