@@ -2,14 +2,18 @@
 
 ## 开源项目
 
-| 项目 | URL | License | 用途 |
-|------|-----|---------|------|
-| motiful/product-shots | https://github.com/motiful/product-shots | MIT | 电商图片生成 Skill 套件（主要复用对象） |
-| StanleyChanH/aliyun-image-skill | https://github.com/StanleyChanH/aliyun-image-skill | MIT | 千问图像 API Skill 封装 |
-| kingbootoshi/nano-banana-2-skill | https://github.com/kingbootoshi/nano-banana-2-skill | MIT | Gemini 图片生成 CLI |
-| ppdbxdawj/seedream-image-skill | https://github.com/ppdbxdawj/ai-skills | MIT | Seedream 5.0 图片生成 Skill |
-| cliprise/awesome-ai-product-photography-prompts | https://github.com/cliprise/awesome-ai-product-photography-prompts | 教育用途 | Prompt 模板参考 |
-| cliprise/awesome-seedream-5-prompts | https://github.com/cliprise/awesome-seedream-5-prompts | 教育用途 | Seedream Prompt 参考 |
+| 项目 | URL | License | commit SHA（复用时） | 用途 |
+|------|-----|---------|----------------------|------|
+| motiful/product-shots | https://github.com/motiful/product-shots | MIT | `063c508b` | Hub/Brief/硬约束传播/QA 思路（仅借鉴思路；本地快照在 `skills/product-shots/`，只读参考） |
+| buluslan/gpt-image2-ecommerce | https://github.com/buluslan/gpt-image2-ecommerce | MIT | `a3673fb6` | 25 个电商场景模板原文复制入 `skills/ecom-shot/references/templates/` |
+| liangdabiao/ecom-details-image | https://github.com/liangdabiao/ecom-details-image | MIT（README 声明，仓库无 LICENSE 文件） | `1ec867b7` | 风格锁定/转化驱动/整套图节奏思路（仅借鉴思路，不复制原文） |
+| StanleyChanH/aliyun-image-skill | https://github.com/StanleyChanH/aliyun-image-skill | MIT | — | 千问图像 API Skill 封装 |
+| kingbootoshi/nano-banana-2-skill | https://github.com/kingbootoshi/nano-banana-2-skill | MIT | — | Gemini 图片生成 CLI |
+| ppdbxdawj/seedream-image-skill | https://github.com/ppdbxdawj/ai-skills | MIT | — | Seedream 5.0 图片生成 Skill |
+| cliprise/awesome-ai-product-photography-prompts | https://github.com/cliprise/awesome-ai-product-photography-prompts | 教育用途 | — | Prompt 模板参考（授权不明确，仅借鉴思路） |
+| cliprise/awesome-seedream-5-prompts | https://github.com/cliprise/awesome-seedream-5-prompts | 教育用途 | — | Seedream Prompt 参考（授权不明确，仅借鉴思路） |
+
+> ecom-shot 内部第三方内容的逐文件来源记录见 `skills/ecom-shot/references/SOURCES.md`。
 
 ## 底层模型
 

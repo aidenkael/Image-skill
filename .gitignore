@@ -55,4 +55,5 @@ desktop.ini
 # === Temp ===
 tmp/
 temp/
+.tmp/
 *.log

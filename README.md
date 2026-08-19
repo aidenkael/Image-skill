@@ -37,6 +37,8 @@
 ```
 Image skill/
 ├─ skills/          # Agent Skill 文件（复用或适配的开源 Skill）
+│  ├─ ecom-shot/    # 活动 Skill：全品类电商生图薄决策层（25 成熟模板 + 保真 + QA）
+│  └─ product-shots/# motiful/product-shots 只读快照（参考资料，非活动 Skill）
 ├─ prompts/         # 结构化 Prompt 模板
 ├─ workflows/       # ComfyUI 工作流 JSON
 ├─ configs/         # 模型/Provider 配置
