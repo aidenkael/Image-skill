@@ -15,17 +15,22 @@
     python crystal/crystal.py label \
         --input candidate.png --labels l.json --output final.png
 
-analysis.json（坐标 0..1000 归一化；bracelet_bbox 紧圈手镯以排除包装/手/纸张）:
+analysis.json（坐标 0..1000 归一化）:
     {"bracelet_bbox_1000": [x1,y1,x2,y2],
      "bead_groups": [
-       {"group_id": "g1", "display_name": "中文标注名",
-        "visual_identity": "自由文本可见身份描述（几何/相对表观尺寸/颜色/透明度/纹理/表面特征）",
+       {"display_name": "中文标注名",
+        "visual_identity": "自由文本可见身份描述（几何/相对物理尺寸/颜色/透明度/内含物/纹理/表面特征）",
         "representative_bbox_1000": [x1,y1,x2,y2]}, ...]}
-bead_groups = 手镯上视觉可区分的珠组（非矿物鉴定）：
-分组由可见身份决定；相近色族但几何或表观尺寸实质不同也应分为不同组；
-只统计物理位于手镯环体上的珠类，代表珠裁自环体本身（Agent 视觉分析职责）；
+bracelet_bbox_1000 = 完整可见手镯产品范围：包含手镯自有的珠/石/珍珠、金属包边、
+隔珠、连接件、吊坠/挂饰；仅排除外包装、托盘、纸张、手及无关背景物体。
+bead_groups = 手镯上视觉可区分的非金属珠/石/珍珠材质组件（物理上属于该手镯）：
+同一组的判据 = 允许透视、光照/反射、珠间自然微小差异后，设计层面的可见身份仍等价；
+几何/形状、标称物理尺寸、颜色/光学外观、透明度/不透明度、特征纹理/内含物/表面外观
+任一出现清晰可见的设计层面差异，MUST 分为不同组（不使用"可分开"等模糊措辞）；
+金属隔珠/帽/包边/配件不属于珠组，但仍是完整手镯的一部分，必须在生成中保留；
+只统计物理位于手镯上的组件，代表珠裁自手镯本身（Agent 视觉分析职责）；
 代表矩形落在 bracelet_bbox 内仅为坐标 sanity check，不证明物理归属；
-金属隔珠/银饰/包装/消磁碎石/散石/纸张/背景中任何类水晶物体不得计为一组；
+包装/托盘/纸张/手/背景中任何类水晶物体不得计为一组；
 --types 可选：提供则强校验组数，缺省则用当前分析的新鲜组数（不复用历史运行）。
 display_name 仅用于最终 Pillow 标注，绝不进入生成 Prompt。
 
@@ -100,10 +105,13 @@ def _endpoint():
 # ---------------------------------------------------------------- 分析校验
 
 def clean_name(name):
-    name = str(name).strip()
-    for w in _uncertain:
-        name = name.replace(w, "")
-    return name.strip("：:（）() ") or "未知水晶"
+    """清洗标注名：去首尾空白与全半角括号冒号；空名/不确定措辞显式抛错，不静默兜底。"""
+    name = str(name).strip().strip("：:（）() ")
+    if not name:
+        raise ValueError("名称不能为空")
+    if any(w in name for w in _uncertain):
+        raise ValueError("名称不得包含疑似/可能/大概/或许等不确定措辞")
+    return name
 
 
 def bbox1000_to_pixels(bbox, width, height):
@@ -122,10 +130,13 @@ def bbox1000_to_pixels(bbox, width, height):
 def _check_bbox(bbox, label):
     if not all(0.0 <= v <= 1000.0 for v in bbox):
         raise ValueError(f"{label} 超出 0-1000: {bbox}")
+    x1, y1, x2, y2 = bbox
+    if not (x1 < x2 and y1 < y2):
+        raise ValueError(f"{label} 必须满足 x1<x2 且 y1<y2（拒绝反向/零面积矩形）: {bbox}")
 
 
 def validate_analysis(raw, type_count=None):
-    """bead_groups schema：group_id + display_name + visual_identity 自由文本 + 代表矩形。
+    """bead_groups schema：display_name + visual_identity 自由文本 + 代表矩形（无 group_id）。
 
     type_count 可选：显式提供则强校验组数；缺省用当前分析的新鲜组数。
     代表矩形包含关系仅为坐标 sanity check；物理归属手镯是 Agent 视觉分析职责。"""
@@ -159,8 +170,7 @@ def validate_analysis(raw, type_count=None):
                 rb[2] <= bb[2] + 1 and rb[3] <= bb[3] + 1):
             raise ValueError(f"bead_groups[{i}] 代表矩形坐标 sanity check 失败："
                              f"应落在 bracelet_bbox_1000 内")
-        cleaned.append({"group_id": str(g.get("group_id", f"g{i+1}")).strip() or f"g{i+1}",
-                        "display_name": clean_name(g.get("display_name", "")),
+        cleaned.append({"display_name": clean_name(g.get("display_name", "")),
                         "visual_identity": vi,
                         "representative_bbox_1000": rb})
     return {"bracelet_bbox_1000": bb, "bead_groups": cleaned}
@@ -169,7 +179,7 @@ def validate_analysis(raw, type_count=None):
 # ---------------------------------------------------------------- 本地准备
 
 def build_clean_source(input_path, bbox_1000, out_path, margin=0.06):
-    """清理裁剪：紧圈手镯，排除包装/手/说明纸等无关内容。"""
+    """清理裁剪：完整可见手镯产品范围（含金属配件），排除包装/托盘/手/说明纸等无关内容。"""
     im = Image.open(input_path).convert("RGB")
     w, h = im.size
     x1, y1, x2, y2 = bbox1000_to_pixels(bbox_1000, w, h)
@@ -234,7 +244,7 @@ Representative beads (secondary):
 - One loose bead per group below; the list order matches the references in Image 2 (indexing convention only).
 {groups}
 - Each loose bead must visibly match its group's visual_identity description: same geometry, same relative apparent size, same color and transparency/opacity, same inclusions and surface traits. Never normalize different groups toward a common shape or size.
-- Each loose bead must look as if the actual bead was removed from the bracelet and set down beside it: approximately the same real-world diameter as its corresponding bracelet bead, with only minor apparent-size variation from perspective. Never enlarge it into a separate hero object; never intentionally shrink it.
+- Each representative must look like the actual bracelet component was physically removed from the bracelet and placed beside it. Preserve its physical scale and dimensions relative to the bracelet, and preserve the relative size relationships between different groups. Allow only normal perspective variation. Never intentionally enlarge or shrink a representative.
 - Their final spatial arrangement is free and should be chosen for the most natural hand-arranged jewelry composition: asymmetry, natural spacing, comfortable negative space; no fixed order, no row, no arc template, no equal spacing.
 - Keep the representative beads secondary to the complete bracelet.
 - No extra sample beads. No loose metal accessories.
@@ -256,10 +266,10 @@ NEGATIVE = ("extra bracelet, redesigned bracelet, changed bead type, invented be
 
 
 def _groups_text(groups):
-    """按参考页左→右顺序（仅索引约定）绑定身份：只含 group_id + visual_identity，
+    """按参考页索引（仅身份/索引约定）绑定可见身份：只含 visual_identity，
     display_name 绝不进入生成 Prompt（猜测的矿名不得干扰生成）。"""
     return "\n".join(
-        f"- Group {g['group_id']} (reference {i} in Image 2): {g['visual_identity']}."
+        f"- Reference {i}: {g['visual_identity']}."
         for i, g in enumerate(groups, 1))
 
 
@@ -304,8 +314,16 @@ def call_edit(clean_src, sheet, template, output_path, groups, size="1200*1600")
     if not url:
         raise RuntimeError(f"编辑调用失败: {model} 响应无图片")
     img = requests.get(url, timeout=120)
+    img.raise_for_status()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(output_path).write_bytes(img.content)
+
+    try:
+        with Image.open(output_path) as generated:
+            generated.verify()
+    except Exception as e:
+        Path(output_path).unlink(missing_ok=True)
+        raise RuntimeError(f"生成结果不是有效图片: {e}")
     print(f"model_used: {model}")
     return model
 
@@ -406,7 +424,11 @@ def main():
         except Exception as e:
             print(f"ERROR: labels 读取失败: {e}")
             return 1
-        render_labels(args.input, labels, args.output, args.font_size)
+        try:
+            render_labels(args.input, labels, args.output, args.font_size)
+        except Exception as e:
+            print(f"ERROR: 标注失败（名称不能为空/含不确定措辞等）: {e}")
+            return 1
         print(f"final: {args.output}")
         return 0
     return 1

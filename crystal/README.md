@@ -1,12 +1,13 @@
 # crystal — 水晶手镯参考图技能
 
 输入一张手镯实拍图 + 种类数 N，输出一张"人工摆拍 + 手工标注"感的珠宝参考照片：
-完整手镯为主体，N 颗同物理尺寸的代表珠（像从手镯取下）自然散落其旁，小字楷体中文注记（可带细引线）。
+完整手镯为主体，N 组视觉可区分的非金属珠/石/珍珠组件（bead_groups）各取一个代表件，
+像被物理取下摆在手镯旁（保留相对物理尺度与组间相对尺寸关系，不放大不缩小），小字楷体中文注记（可带细引线）。
 
 ## 主流水线（生成式编辑）
 
 ```
-源图清理裁剪 → Agent 识别 N 类 + 代表珠 → 珠子参考页
+源图清理裁剪 → Agent 识别 N 组 + 代表珠 → 珠子参考页
 → 一次 qwen 图像编辑调用（清理源图 + 参考页 + templates/04.jpg）
 → 本地 Pillow 编辑式标注 → 成品图
 ```
@@ -26,7 +27,13 @@ pip install -r crystal/requirements.txt
 ## 用法
 
 ```
-# 1) Agent 识别后写 analysis.json（bracelet_bbox_1000 + bead_groups[visual_identity 自由文本]，均为手镯上的珠组）
+# 1) Agent 识别后写 analysis.json：
+#    bracelet_bbox_1000 = 完整可见手镯产品范围（含金属配件，排除包装/托盘/手/纸张）；
+#    bead_groups = 手镯上视觉可区分的非金属珠/石/珍珠组件（物理上属于该手镯）：
+#    允许透视/光照/珠间自然差异后设计层面可见身份仍等价才同组；几何/物理尺寸/颜色/透明度/
+#    内含物/纹理/表面任一出现清晰可见设计差异，MUST 分为不同组；
+#    每组 {"display_name": 中文标注名, "visual_identity": 可见外观自由文本, "representative_bbox_1000": 代表矩形}，无 group_id；
+#    display_name 只用于标注，绝不进入生成 Prompt
 #    --types 可选：提供则强校验组数；缺省用当前分析的新鲜组数
 python crystal/crystal.py run --input src.jpg [--types N] \
     --analysis analysis.json --output candidate.png
