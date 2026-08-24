@@ -6,7 +6,7 @@
     → 一次 qwen 图像编辑调用（清理源图 + 参考页 + 固定场景模板）
     → 本地 Pillow 编辑式标注 → 成品图
 
-凭证仅从环境读取（.env / 环境变量），代码不硬编码密钥；
+凭证仅从环境变量 DASHSCOPE_API_KEY（.env）读取，代码不硬编码密钥，无其他凭证回退；
 模型/端点可用环境变量替换（QWEN_EDIT_MODEL / DASHSCOPE_API_URL）。
 
 用法:
@@ -17,7 +17,9 @@
 
 analysis.json（坐标 0..1000 归一化；bracelet_bbox 紧圈手镯以排除包装/手/纸张）:
     {"bracelet_bbox_1000": [x1,y1,x2,y2],
-     "crystals": [{"name": "锂云母", "bbox_1000": [x1,y1,x2,y2]}, ...]}  # 恰好 N
+     "crystals": [{"name": "锂云母", "bbox_1000": [x1,y1,x2,y2]}, ...]}  # 恰好 N，且均为手镯上的珠类
+crystals 只统计物理位于手镯环体上的水晶珠类，代表珠裁剪也必须来自环体本身；
+包装/消磁碎石/散石/纸张/背景中任何类水晶物体不得计为一类。
 
 labels.json（像素坐标，位置应呼应生成图中散珠摆放，小字、克制、可带细引线）:
     {"labels": [{"text": "锂云母", "x": 372, "y": 1330,
@@ -66,12 +68,25 @@ _load_env()
 
 
 def _token():
-    return os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    """凭证只读 DASHSCOPE_API_KEY，不设任何其他回退。"""
+    return os.environ.get("DASHSCOPE_API_KEY")
+
+
+# Token Plan 端点（sk-sp- 凭证）见根目录 .env.example；其余走 DashScope 标准端点
+TOKEN_PLAN_ENDPOINT = ("https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/"
+                       "multimodal-generation/generation")
+DASHSCOPE_ENDPOINT = ("https://dashscope.aliyuncs.com/api/v1/services/aigc/"
+                      "multimodal-generation/generation")
 
 
 def _endpoint():
-    return os.environ.get("DASHSCOPE_API_URL") or \
-        "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    """DASHSCOPE_API_URL 优先；否则 sk-sp- 用 Token Plan 端点，其余用标准端点。"""
+    url = os.environ.get("DASHSCOPE_API_URL")
+    if url:
+        return url
+    if (_token() or "").startswith("sk-sp-"):
+        return TOKEN_PLAN_ENDPOINT
+    return DASHSCOPE_ENDPOINT
 
 
 def _models():
@@ -114,7 +129,7 @@ def validate_analysis(raw, type_count):
         raise ValueError("analysis 缺少 crystals 列表")
     if len(crystals) != type_count:
         raise ValueError(f"水晶种类数不符: analysis 提供 {len(crystals)} 种，"
-                         f"要求恰好 {type_count} 种")
+                         f"要求恰好 {type_count} 种手镯上的水晶珠类")
     cleaned = []
     for i, c in enumerate(crystals):
         if not isinstance(c, dict) or not isinstance(c.get("bbox_1000"), (list, tuple)):
@@ -173,9 +188,9 @@ Composition:
 - Do not redesign the bracelet; do not add or remove components; do not invent bead types or shapes.
 - Near the bracelet (a gentle loose arc at its lower side), place exactly {n} loose representative beads, one per crop in Image 2. Not more, not fewer.
 - Bead order is critical and must be preserved exactly: reading Image 2 from left to right, bead #1 goes to the left, bead #2 next to it, bead #3 to the right. Never swap, reorder or substitute them.
-- The loose beads must be clearly smaller than the bracelet beads (about half their diameter) and visually belong to the same scene, as if manually set down beside it for reference.
+- Each loose bead must look as if the actual bead was removed from the bracelet and set down beside it: approximately the same real-world diameter as its corresponding bracelet bead, with only minor apparent-size variation from perspective. Never enlarge it into a separate hero object; never intentionally shrink it.
 - Do NOT arrange the loose beads in a rigid centered straight row; avoid mechanical equal spacing.
-- Each loose bead must match its source crop in material, color, transparency, inclusions and shape. If a source crop shows a metal cap or fitting, render that bead as a plain bare bead without it.
+- Each loose bead must preserve exactly what its source crop visibly shows (material, color, transparency, inclusions, shape). Keep the visible reference as-is; never reconstruct unseen areas, and never remove a metal cap or fitting to synthesize the crystal surface beneath it.
 - No loose metal accessories.
 
 Style:

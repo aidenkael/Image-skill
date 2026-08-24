@@ -1,7 +1,7 @@
 # crystal — 水晶手镯参考图技能
 
 输入一张手镯实拍图 + 种类数 N，输出一张"人工摆拍 + 手工标注"感的珠宝参考照片：
-完整手镯为主体，N 颗更小的代表珠自然散落其旁，小字楷体中文注记（可带细引线）。
+完整手镯为主体，N 颗同物理尺寸的代表珠（像从手镯取下）自然散落其旁，小字楷体中文注记（可带细引线）。
 
 ## 主流水线（生成式编辑）
 
@@ -19,13 +19,14 @@
 pip install -r crystal/requirements.txt
 ```
 
-凭证经 `.env`/环境变量（不硬编码）：`DASHSCOPE_API_KEY`（或环境 Token Plan bearer）；
-可选 `DASHSCOPE_API_URL`、`QWEN_EDIT_MODEL`（默认 qwen-image-3.0-pro，回退 qwen-image-2.0-pro）。
+凭证经 `.env`/环境变量（不硬编码）：仅 `DASHSCOPE_API_KEY`，无其他回退；
+端点解析：`DASHSCOPE_API_URL` 优先，`sk-sp-` key 走 Token Plan 端点（见根 `.env.example`），否则 DashScope 标准端点；
+可选 `QWEN_EDIT_MODEL`（默认 qwen-image-3.0-pro，回退 qwen-image-2.0-pro）。
 
 ## 用法
 
 ```
-# 1) Agent 识别后写 analysis.json（bracelet_bbox_1000 + 恰好 N 个 crystals）
+# 1) Agent 识别后写 analysis.json（bracelet_bbox_1000 + 恰好 N 个 crystals，均为手镯上的珠类）
 python crystal/crystal.py run --input src.jpg --types 3 \
     --analysis analysis.json --output candidate.png
 

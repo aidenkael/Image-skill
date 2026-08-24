@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """crystal 技能本地验证（无网络、无 API 调用）。"""
+import os
 import sys
 from pathlib import Path
 
@@ -50,5 +51,33 @@ final = crystal.render_labels(OUT / "t_canvas.png", [
     {"text": "白水晶", "x": 760, "y": 1330}], OUT / "t_final.png")
 assert final.exists()
 print("[ok] render_labels 编辑式标注")
+
+# 6) 凭证/端点解析：仅 DASHSCOPE_API_KEY；URL 优先 → sk-sp- Token Plan → 标准端点
+saved = {k: os.environ.get(k) for k in ("DASHSCOPE_API_URL", "DASHSCOPE_API_KEY")}
+try:
+    os.environ["DASHSCOPE_API_URL"] = "https://example.org/custom"
+    os.environ["DASHSCOPE_API_KEY"] = "sk-plain"
+    assert crystal._endpoint() == "https://example.org/custom"
+    del os.environ["DASHSCOPE_API_URL"]
+    os.environ["DASHSCOPE_API_KEY"] = "sk-sp-test"
+    assert crystal._endpoint() == crystal.TOKEN_PLAN_ENDPOINT
+    os.environ["DASHSCOPE_API_KEY"] = "sk-plain"
+    assert crystal._endpoint() == crystal.DASHSCOPE_ENDPOINT
+    del os.environ["DASHSCOPE_API_KEY"]
+    assert crystal._token() is None, "凭证必须只读 DASHSCOPE_API_KEY"
+finally:
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+print("[ok] 凭证/端点解析")
+
+# 7) 口径守卫：无半尺寸规则、无去金属帽合成裸珠指令、无其他凭证回退、识别范围限手镯
+assert "about half their diameter" not in src_text, "代表珠不得故意缩小为一半"
+assert "plain bare bead" not in src_text, "不得指示模型去金属帽合成裸珠"
+assert "AUTH_TOKEN" not in src_text, "凭证只允许 DASHSCOPE_API_KEY"
+assert "removed from the bracelet" in src_text, "散珠须同物理尺寸（像从手镯取下）"
+print("[ok] 物理尺度/范围/凭证口径守卫")
 
 print("\nALL CRYSTAL CHECKS PASSED")
