@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """crystal 技能本地验证（无网络、无 API 调用）。
 
-覆盖：bbox 校验、schema 无 group_id、_groups_text 参考图映射、独立代表参考图、
-组数上限预检、wan2.7-image-pro 默认模型、凭证/端点规则、本地标注。
+覆盖：bbox 校验、schema 无 group_id、validate_placements 结构校验、
+insert_representative 两图输入 + [[], [target_box]] bbox 结构（mock _call_wan）、
+compose 顺序合成结构、一次性多参考合成代码零残留、wan2.7-image-pro 默认模型、
+凭证/端点规则、本地标注。
 """
 import copy  # noqa: E402
 import os
@@ -66,7 +68,7 @@ for label, path, bad in (("bracelet", "bracelet_bbox_1000", [800, 800, 200, 200]
         pass
 print("[ok] validate_analysis 与 bbox1000_to_pixels 同语义（反向/零面积拒绝）")
 
-# 4) 名称显式失败 + --types 可选行为
+# 4) 名称显式失败 + type_count 可选行为
 a2 = crystal.validate_analysis(good, 2)  # 显式 N：强校验
 assert [g["display_name"] for g in a2["bead_groups"]] == ["粉晶", "海蓝宝"]
 try:
@@ -92,21 +94,9 @@ try:
     raise SystemExit("FAIL: 不确定措辞应抛错")
 except ValueError:
     pass
-print("[ok] 空/不确定名称显式拒绝；--types 可选行为保持")
+print("[ok] 空/不确定名称显式拒绝；type_count 可选行为保持")
 
-# 5) _groups_text()：映射参考图 2..N+1，只含 visual_identity
-groups5 = [{"display_name": f"名{i}", "visual_identity": f"identity-{i}"}
-           for i in range(1, 6)]
-gt = crystal._groups_text(groups5)
-assert "Reference image 2: identity-1." in gt, "第 1 组应映射到参考图 2"
-assert "Reference image 3: identity-2." in gt
-assert "Reference image 6: identity-5." in gt, "第 5 组应映射到参考图 6"
-assert "Reference image 1" not in gt, "不得引用 Image 1（那是完整手镯）"
-assert all(f"名{i}" not in gt for i in range(1, 6)), "display_name 不得进入生成文本"
-assert "identity-5" in gt
-print("[ok] _groups_text() 映射参考图 2..N+1 且不含 display_name")
-
-# 6) build_representative_crops()：每组一个文件，短边不足 min_side 放大
+# 5) build_representative_crops()：每组一个文件，短边不足 min_side 放大
 crs = [{"display_name": "A", "visual_identity": "x", "representative_bbox_1000": [100, 100, 200, 200]},
        {"display_name": "B", "visual_identity": "x", "representative_bbox_1000": [400, 400, 600, 600]},
        {"display_name": "C", "visual_identity": "x", "representative_bbox_1000": [10, 10, 40, 40]}]
@@ -135,18 +125,55 @@ tiny = Image.open(paths[2])
 assert min(tiny.size) == 64, f"小裁剪短边应精确放大到 min_side=64，实际 {tiny.size}"
 print("[ok] build_representative_crops 每组一文件 + min_side 放大")
 
-# 7) 组数上限预检：>7 组在 API 调用前拒绝（不静默合并、不回退 contact sheet）
-too_many = [{"display_name": f"n{i}", "visual_identity": "x",
-             "representative_bbox_1000": [100, 100, 200, 200]} for i in range(8)]
+# 6) validate_placements：数量/缺失/重复/反向零面积/排序返回
+pl_good = {"placements": [
+    {"reference_index": 2, "bbox_1000": [600, 700, 700, 800]},
+    {"reference_index": 1, "bbox_1000": [100, 700, 200, 800]}]}
+norm = crystal.validate_placements(pl_good, 2)
+assert [p["reference_index"] for p in norm] == [1, 2], "必须按 reference_index 1..N 排序返回"
+assert norm[0]["bbox_1000"] == [100.0, 700.0, 200.0, 800.0]
 try:
-    crystal.call_edit(Path("unused_src"), [], Path("unused_tpl"), Path("unused_out"), too_many)
-    raise SystemExit("FAIL: 8 组应被预检拒绝")
-except ValueError as e:
-    assert "最多支持 7" in str(e), f"预检错误信息不符: {e}"
-assert crystal.MAX_BEAD_GROUPS == 7 and crystal.MAX_INPUT_IMAGES == 9
-print("[ok] 组数上限预检：>7 组在 API 调用前拒绝")
+    crystal.validate_placements(pl_good, 3)
+    raise SystemExit("FAIL: placements 数量错误应被拒绝")
+except ValueError:
+    pass
+try:
+    crystal.validate_placements({"placements": [
+        {"reference_index": 1, "bbox_1000": [100, 100, 200, 200]}]}, 2)
+    raise SystemExit("FAIL: 缺失 reference_index 应被拒绝")
+except ValueError:
+    pass
+try:
+    crystal.validate_placements({"placements": [
+        {"reference_index": 1, "bbox_1000": [100, 100, 200, 200]},
+        {"reference_index": 1, "bbox_1000": [300, 100, 400, 200]}]}, 2)
+    raise SystemExit("FAIL: 重复 reference_index 应被拒绝")
+except ValueError:
+    pass
+try:
+    crystal.validate_placements({"placements": [
+        {"reference_index": 0, "bbox_1000": [100, 100, 200, 200]},
+        {"reference_index": 2, "bbox_1000": [300, 100, 400, 200]}]}, 2)
+    raise SystemExit("FAIL: reference_index 越界（0）应被拒绝")
+except ValueError:
+    pass
+for bad_bbox in ([800, 800, 200, 200],     # 反向
+                 [300, 300, 300, 400]):    # 零面积
+    try:
+        crystal.validate_placements({"placements": [
+            {"reference_index": 1, "bbox_1000": bad_bbox},
+            {"reference_index": 2, "bbox_1000": [600, 700, 700, 800]}]}, 2)
+        raise SystemExit(f"FAIL: placement bbox {bad_bbox} 应被拒绝")
+    except ValueError:
+        pass
+try:
+    crystal.validate_placements([{"reference_index": 1}], 1)
+    raise SystemExit("FAIL: 非对象 placements 应被拒绝")
+except ValueError:
+    pass
+print("[ok] validate_placements 结构校验（数量/缺失/重复/越界/反向零面积/排序）")
 
-# 8) Crystal 默认图像模型 wan2.7-image-pro；QWEN_EDIT_MODEL 不控制 Crystal
+# 7) Crystal 默认图像模型 wan2.7-image-pro；QWEN_EDIT_MODEL 不控制 Crystal
 saved_env = {k: os.environ.get(k) for k in ("CRYSTAL_IMAGE_MODEL", "QWEN_EDIT_MODEL")}
 try:
     os.environ.pop("CRYSTAL_IMAGE_MODEL", None)
@@ -164,20 +191,21 @@ finally:
             os.environ[k] = v
 print("[ok] 默认模型 wan2.7-image-pro；QWEN_EDIT_MODEL 不控制 Crystal")
 
-# 9) 口径守卫：无 qwen 回退、无 contact sheet/bead sheet 运行时、无 prompt_extend
-assert "qwen-image-2.0-pro" not in src_text, "不得有 qwen 回退"
-assert "qwen-image-3.0-pro" not in src_text, "Crystal 不再使用 qwen-image-3.0-pro"
-assert "QWEN_EDIT_MODEL" not in src_text, "Crystal 不使用 QWEN_EDIT_MODEL"
-assert "prompt_extend" not in src_text, "wan2.7-image-pro 不传 prompt_extend"
-assert "build_bead_sheet" not in src_text, "contact sheet 运行时已移除"
-assert "bead_sheet" not in src_text, "不得残留 bead_sheet 产物"
+# 8) 架构守卫：一次性多参考合成零残留，无重试/回退/组数上限
+for gone in ("call_edit", "EDIT_PROMPT", "MAX_INPUT_IMAGES", "MAX_BEAD_GROUPS",
+             "_groups_text", "negative_prompt", "negative prompt",
+             "prompt_extend", "qwen-image-2.0-pro", "build_bead_sheet",
+             "bead_sheet", "retry", "fallback"):
+    assert gone not in src_text, f"一次性合成/回退残留: {gone}"
 assert "wan2.7-image-pro" in src_text, "Crystal 默认模型须为 wan2.7-image-pro"
 assert "CRYSTAL_IMAGE_MODEL" in src_text, "须支持 CRYSTAL_IMAGE_MODEL 覆盖"
-assert "MAX_BEAD_GROUPS" in src_text, "须有组数上限预检"
-assert "never more, never fewer" not in src_text, "新 Prompt 不再使用 contact sheet 措辞"
-print("[ok] 无 qwen 回退/无 contact sheet 运行时/无 prompt_extend 守卫")
+for need in ("_call_wan", "BASE_PROMPT", "INSERT_PROMPT",
+             "generate_base_scene", "insert_representative",
+             "compose_representatives", "validate_placements", "bbox_list"):
+    assert need in src_text, f"缺少分阶段架构组件: {need}"
+print("[ok] 一次性多参考合成零残留；分阶段架构组件齐全；无重试/回退")
 
-# 10) 凭证/端点规则：仅 DASHSCOPE_API_KEY；sk-sp- → Token Plan；非 Token Plan 无 URL → 失败
+# 9) 凭证/端点规则：仅 DASHSCOPE_API_KEY；sk-sp- → Token Plan；非 Token Plan 无 URL → 失败
 saved2 = {k: os.environ.get(k) for k in ("DASHSCOPE_API_URL", "DASHSCOPE_API_KEY")}
 try:
     del os.environ["DASHSCOPE_API_KEY"]
@@ -202,7 +230,91 @@ finally:
             os.environ[k] = v
 print("[ok] 凭证只读 DASHSCOPE_API_KEY；端点规则（Token Plan / 无 URL 明确失败）")
 
-# 11) 本地准备 + 编辑式标注（无网络）
+# 10) mock _call_wan：insert_representative 两图输入 + [[], [target_box]] 结构
+canvas = Image.new("RGB", (1200, 1600), (235, 232, 226))
+canvas.save(OUT / "t_canvas.png")
+rep_img = Image.new("RGB", (96, 96), (200, 160, 180))
+rep_img.save(OUT / "t_rep.png")
+
+calls = []
+
+
+def fake_call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
+    calls.append({"images": [Path(p) for p in images], "prompt": prompt,
+                  "output_path": Path(output_path), "size": size,
+                  "bbox_list": bbox_list})
+    Image.new("RGB", (1200, 1600), (230, 228, 222)).save(output_path)
+    return Path(output_path)
+
+
+orig_call_wan = crystal._call_wan
+crystal._call_wan = fake_call_wan
+try:
+    out = crystal.insert_representative(OUT / "t_canvas.png", OUT / "t_rep.png",
+                                        [100, 100, 200, 200], OUT / "t_insert.png")
+    assert out == Path(OUT / "t_insert.png")
+    assert len(calls) == 1, "一次插入恰好一次调用"
+    c = calls[0]
+    assert len(c["images"]) == 2, "插入调用必须是两图输入"
+    assert c["images"][0] == Path(OUT / "t_rep.png"), "Image 1 必须是代表件参考"
+    assert c["images"][1] == Path(OUT / "t_canvas.png"), "Image 2 必须是当前画布"
+    assert c["bbox_list"] == [[], [[120, 160, 240, 320]]], \
+        f"bbox_list 必须恰好 [[], [target_box]]，实际 {c['bbox_list']}"
+    assert c["size"] == "1200*1600", "插入尺寸必须跟随画布"
+    assert c["prompt"] == crystal.INSERT_PROMPT
+
+    # generate_base_scene：两图（手镯裁剪 + 模板），无散珠、无 bbox_list
+    calls.clear()
+    crystal.generate_base_scene(OUT / "t_rep.png", OUT / "t_canvas.png",
+                                OUT / "t_base.png", size="1200*1600")
+    assert len(calls) == 1, "基础场景恰好一次调用"
+    cb = calls[0]
+    assert len(cb["images"]) == 2 and cb["bbox_list"] is None, \
+        "基础场景不得传代表参考或 bbox"
+    assert cb["prompt"] == crystal.BASE_PROMPT
+
+    # compose_representatives：按 reference 顺序每件恰好一次插入（非重试循环）
+    calls.clear()
+    rep2 = OUT / "t_rep2.png"
+    Image.new("RGB", (96, 96), (150, 190, 200)).save(rep2)
+    placements = crystal.validate_placements({"placements": [
+        {"reference_index": 2, "bbox_1000": [600, 700, 700, 800]},
+        {"reference_index": 1, "bbox_1000": [100, 700, 200, 800]}]}, 2)
+    final_out = crystal.compose_representatives(
+        OUT / "t_canvas.png", [OUT / "t_rep.png", rep2], placements,
+        OUT / "t_composed.png", OUT / "t_work")
+    assert final_out == Path(OUT / "t_composed.png") and final_out.exists()
+    assert len(calls) == 2, "N 组恰好 N 次插入调用"
+    assert calls[0]["images"][0] == Path(OUT / "t_rep.png"), "第 1 步应插入 reference 1"
+    assert calls[1]["images"][0] == rep2, "第 2 步应插入 reference 2"
+    assert calls[0]["images"][1] == Path(OUT / "t_canvas.png"), "第 1 步画布应为 base"
+    assert calls[1]["images"][1] == OUT / "t_work" / "insert_01.png", \
+        "后续步骤画布应为上一步产物（顺序串行）"
+    assert calls[0]["output_path"] == OUT / "t_work" / "insert_01.png", \
+        "中间步产物应落在 workdir"
+    assert calls[1]["output_path"] == Path(OUT / "t_composed.png"), \
+        "最后一步产物应为最终输出"
+    try:
+        crystal.compose_representatives(OUT / "t_canvas.png", [OUT / "t_rep.png"],
+                                        placements, OUT / "t_x.png", OUT / "t_work")
+        raise SystemExit("FAIL: 参考图数量与 placements 不一致应被拒绝")
+    except ValueError:
+        pass
+finally:
+    crystal._call_wan = orig_call_wan
+print("[ok] insert_representative/base/compose 结构（mock _call_wan，无网络）")
+
+# 11) _call_wan bbox_list 长度守卫（长度与图片数不一致时不发请求即拒绝）
+try:
+    crystal._call_wan([OUT / "t_rep.png", OUT / "t_canvas.png"],
+                      crystal.INSERT_PROMPT, OUT / "t_unused.png",
+                      bbox_list=[[]])
+    raise SystemExit("FAIL: bbox_list 长度与图片数不一致应立即拒绝")
+except ValueError:
+    pass
+print("[ok] _call_wan bbox_list 长度守卫")
+
+# 12) 本地准备 + 编辑式标注（无网络）
 clean = crystal.build_clean_source(SAMPLE, good["bracelet_bbox_1000"], OUT / "t_clean.jpg")
 assert clean.exists()
 # 短边不足时 clean_source 放大到 >=240（wan2.7-image-pro 输入最低分辨率）
@@ -212,8 +324,6 @@ c_tiny = crystal.build_clean_source(OUT / "t_tiny.png", [10, 10, 90, 90],
                                     OUT / "t_clean_tiny.jpg", margin=0.0)
 tc = Image.open(c_tiny)
 assert min(tc.size) >= 240, f"clean_source 短边应放大到 >=240，实际 {tc.size}"
-canvas = Image.new("RGB", (1200, 1600), (235, 232, 226))
-canvas.save(OUT / "t_canvas.png")
 final = crystal.render_labels(OUT / "t_canvas.png", [
     {"text": "粉晶", "x": 400, "y": 1300, "point_to": [400, 1220]},
     {"text": "海蓝宝", "x": 760, "y": 1330}], OUT / "t_final.png")

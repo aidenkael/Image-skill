@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""crystal 技能 — 水晶手镯参考图（生成式编辑主流水线，唯一运行时入口）。
+"""crystal 技能 — 水晶手镯参考图（bbox 逐件插入主流水线，唯一运行时入口）。
 
-主流水线（取代旧 rembg 本地合成与 contact sheet 瓶颈）：
-    源图清理裁剪 → Agent 识别 N 组 + 每组一个独立代表件裁剪
-    → 一次 wan2.7-image-pro 多参考图编辑调用（Image1 完整手镯 + N 张独立代表参考 + 场景模板）
+主流水线（规划式多阶段、零重试；取代一次性多参考图合成）：
+    新鲜 analysis → base：清理裁剪 + 每组独立代表件裁剪 + 一次场景生成（无散珠）
+    → Agent 一次性决定全部摆放框 placements.json
+    → compose：每件代表件恰好一次 wan2.7-image-pro bbox_list 插入调用（顺序串行，非重试）
     → Agent 视觉 QA → 本地 Pillow 编辑式标注 → 成品图
 
 凭证仅从环境变量 DASHSCOPE_API_KEY（.env）读取，代码不硬编码密钥，无其他凭证回退；
 Crystal 图像模型用 CRYSTAL_IMAGE_MODEL（默认 wan2.7-image-pro），端点可用 DASHSCOPE_API_URL 替换。
 
 用法:
-    python crystal/crystal.py run \
-        --input src.jpg [--types N] --analysis a.json --output candidate.png
+    python crystal/crystal.py base \
+        --input src.jpg --analysis a.json --output base.png --workdir work
+    # Agent 目视 base 图后写 placements.json（每组恰好一个框）
+    python crystal/crystal.py compose \
+        --input base.png --source src.jpg --analysis a.json \
+        --placements placements.json --output candidate.png --workdir work
     python crystal/crystal.py label \
         --input candidate.png --labels l.json --output final.png
 
@@ -37,6 +42,14 @@ display_name 仅用于最终 Pillow 标注，绝不进入生成 Prompt。
 labels.json（像素坐标，位置应呼应生成图中散珠摆放，小字、克制、可带细引线）:
     {"labels": [{"text": "锂云母", "x": 372, "y": 1330,
                  "point_to": [372, 1240]}, ...]}
+
+placements.json（base 场景上 0..1000 归一化坐标，Agent 一次性决定全部框）:
+    {"placements": [{"reference_index": 1,
+                     "bbox_1000": [x1, y1, x2, y2]}, ...]}
+reference_index 从 1 起对应 bead_groups 顺序，1..N 各恰好一次；
+框不得压住主手镯、不得刻意相互重叠、物理尺寸须匹配手镯组件尺度、
+手工摆放感（非行/网格/等距/弧线模板）。框的校验仅为结构性检查，
+摆放审美由 Agent 视觉分析负责。
 """
 
 import argparse
@@ -178,6 +191,40 @@ def validate_analysis(raw, type_count=None):
     return {"bracelet_bbox_1000": bb, "bead_groups": cleaned}
 
 
+def validate_placements(raw, group_count):
+    """placements 结构性校验：每组恰好一个框，reference_index 恰好覆盖 1..N。
+
+    摆放审美/不压手镯/不相互重叠是 Agent 视觉职责，代码只保证结构合法。
+    返回按 reference_index 1..N 排序的规范列表。"""
+    if not isinstance(raw, dict):
+        raise ValueError("placements 必须是 JSON 对象")
+
+    items = raw.get("placements")
+    if not isinstance(items, list) or len(items) != group_count:
+        raise ValueError(
+            f"placements 数量必须等于 bead_groups 数量 {group_count}"
+        )
+
+    found = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("placement 项必须是对象")
+        idx = item.get("reference_index")
+        if not isinstance(idx, int) or isinstance(idx, bool) \
+                or not (1 <= idx <= group_count):
+            raise ValueError(f"reference_index 非法: {idx}")
+        if idx in found:
+            raise ValueError(f"reference_index 重复: {idx}")
+        found[idx] = _check_bbox(item.get("bbox_1000"),
+                                 f"placements[{idx}].bbox_1000")
+
+    if set(found) != set(range(1, group_count + 1)):
+        raise ValueError("placements 必须完整覆盖 reference_index 1..N")
+
+    return [{"reference_index": idx, "bbox_1000": found[idx]}
+            for idx in range(1, group_count + 1)]
+
+
 # ---------------------------------------------------------------- 本地准备
 
 def build_clean_source(input_path, bbox_1000, out_path, margin=0.06, min_side=384):
@@ -235,67 +282,59 @@ def build_representative_crops(input_path, groups, out_dir, min_side=384):
 
 # ---------------------------------------------------------------- 编辑调用
 
-MAX_INPUT_IMAGES = 9
-MAX_BEAD_GROUPS = MAX_INPUT_IMAGES - 2
-
-
 def _image_model():
     """Crystal 专用图像编辑模型：CRYSTAL_IMAGE_MODEL 可覆盖，默认 wan2.7-image-pro。
     Crystal 不使用 ecom-shot 的编辑模型配置变量。"""
     return os.environ.get("CRYSTAL_IMAGE_MODEL", "wan2.7-image-pro")
 
 
-EDIT_PROMPT = """Create a photorealistic jewelry reference photo.
+BASE_PROMPT = """Create one photorealistic commercial/editorial jewelry photograph.
 
-Reference roles:
-- Image 1 is the only source of truth for the complete bracelet.
-- Images 2 through {n_plus_one} are independent representative component references, exactly one image per bead_group.
-- Image {scene_index} is only the empty scene/background reference.
+Image 1 is the only source of truth for the complete bracelet.
+Image 2 is only the empty scene/background reference.
 
-Bracelet:
-- Recreate one complete bracelet from Image 1.
-- Preserve all visible beads, stones, pearls, metal settings, spacers, connectors and ornaments.
-- Preserve order, geometry, relative physical scale, color, transparency, inclusions and surface traits.
-- Do not add, remove, merge, substitute or redesign bracelet components.
+Place one complete bracelet naturally into the scene from Image 2.
+Preserve the bracelet from Image 1:
+- all beads, stones and pearls
+- geometry and order
+- relative physical scale
+- color and transparency
+- inclusions and surface traits
+- all metal settings, spacers, connectors and ornaments
 
-Loose representatives:
-- Create exactly {n} loose representatives in the final image.
-- Create exactly one from each independent representative reference image.
-{groups}
-- Every representative must preserve the visible identity of its own reference.
-- Preserve its physical scale relative to the bracelet and the relative size relationships between groups.
-- Do not normalize different groups toward a common shape, size, color or transparency.
-- No duplicate, omitted, merged or substituted representative.
-- No extra loose metal accessories.
+Do not add, remove, merge, substitute or redesign any bracelet component.
 
-Composition:
-- Complete bracelet is the clear main subject.
-- Loose representatives are secondary and look naturally hand-arranged beside it.
-- Use asymmetry, natural spacing and comfortable negative space.
-- No row, grid, equal spacing, fixed arc or reference-order layout.
+Leave comfortable natural negative space around the bracelet for a few small loose jewelry components to be placed later.
 
-Style:
-- photorealistic commercial/editorial jewelry photography
-- believable crystal/glass/pearl material
-- natural reflections and contact shadows
-- no CGI/plastic/sticker/collage look
+Generate no loose representative beads in this step.
+Generate no text, labels, title, logo or watermark.
 
-Text:
-- generate no text, labels, title, logo or watermark"""
+Photorealistic jewelry photography.
+Natural reflections and contact shadows.
+No CGI, plastic, sticker or collage appearance.
+"""
 
-NEGATIVE = ("extra representative, missing representative, duplicate representative, merged representative, "
-            "changed bracelet structure, changed bead geometry, changed bead scale, changed transparency, "
-            "loose metal accessory, rigid row, grid, equal spacing, fixed arc, "
-            "text, labels, title, watermark, CGI, plastic, sticker, collage")
+INSERT_PROMPT = """Place the single jewelry component from Image 1 into the selected area of Image 2.
 
+Image 2 is the current finished jewelry photograph.
+Edit only the selected area.
 
-def _groups_text(groups):
-    """每个组直接对应一张独立参考图（Image 2..N+1）：只含 visual_identity，
-    display_name 绝不进入生成 Prompt（猜测的矿名不得干扰生成）。"""
-    return "\n".join(
-        f"- Reference image {i + 2}: {g['visual_identity']}."
-        for i, g in enumerate(groups)
-    )
+Create exactly one physical loose representative matching Image 1.
+Preserve its visible geometry, color, transparency/opacity, inclusions, texture and surface traits.
+Match the physical scale implied by the selected area and the bracelet already present in Image 2.
+
+Make it look naturally placed on the surface:
+- correct contact shadow
+- correct local reflection
+- correct scene lighting
+- no floating object
+- no cutout/sticker edge
+
+Do not change the bracelet.
+Do not change previously placed loose representatives.
+Do not add any other object.
+Do not generate text, labels, logo or watermark.
+"""
 
 
 def _b64url(p: Path) -> str:
@@ -303,69 +342,150 @@ def _b64url(p: Path) -> str:
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
 
 
-def call_edit(clean_src, representative_paths, template, output_path, groups,
-              size="1200*1600"):
-    """一次 wan2.7-image-pro 多参考图编辑调用；single-pass：不自动重试、不换模型重跑。
+def _call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
+    """共享的 wan2.7-image-pro 调用：基础场景生成与逐件插入共用。
 
-    输入图顺序：Image1 完整手镯裁剪 → N 张独立代表件参考图 → 最后为场景模板。
-    失败即抛错，无 qwen 回退、无 contact-sheet 回退。"""
-    if len(groups) > MAX_BEAD_GROUPS:
-        raise ValueError(
-            f"当前直接多参考图路径最多支持 {MAX_BEAD_GROUPS} 个 bead_groups，"
-            f"当前为 {len(groups)}；拒绝退化为 contact sheet"
-        )
+    规划式多阶段、零重试：失败即抛错，不重试、不换模型、不回退。"""
     token = _token()
     if not token:
         raise RuntimeError("无可用凭证：请配置 .env 的 DASHSCOPE_API_KEY")
-    model = _image_model()
-    content = [{"image": _b64url(clean_src)}]
-    content.extend({"image": _b64url(p)} for p in representative_paths)
-    content.append({"image": _b64url(template)})
-    content.append({
-        "text": EDIT_PROMPT.format(
-            n=len(groups),
-            n_plus_one=len(groups) + 1,
-            scene_index=len(groups) + 2,
-            groups=_groups_text(groups),
-        )
-    })
-    payload = {
-        "model": model,
-        "input": {"messages": [{"role": "user", "content": content}]},
-        "parameters": {"n": 1, "size": size, "negative_prompt": NEGATIVE},
+
+    content = [{"image": _b64url(Path(p))} for p in images]
+    content.append({"text": prompt})
+
+    parameters = {
+        "n": 1,
+        "size": size,
+        "watermark": False,
     }
-    resp = requests.post(_endpoint(),
-                         headers={"Authorization": f"Bearer {token}",
-                                  "Content-Type": "application/json"},
-                         json=payload, timeout=600)
+    if bbox_list is not None:
+        if len(bbox_list) != len(images):
+            raise ValueError("bbox_list 长度必须与输入图片数量一致")
+        parameters["bbox_list"] = bbox_list
+
+    payload = {
+        "model": _image_model(),
+        "input": {
+            "messages": [{
+                "role": "user",
+                "content": content,
+            }]
+        },
+        "parameters": parameters,
+    }
+
+    resp = requests.post(
+        _endpoint(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=600,
+    )
     if resp.status_code != 200:
-        raise RuntimeError(f"编辑调用失败: {model} HTTP {resp.status_code}: {resp.text[:200]}")
+        raise RuntimeError(
+            f"图像调用失败: {_image_model()} HTTP {resp.status_code}: "
+            f"{resp.text[:200]}"
+        )
+
     data = resp.json()
     url = None
     try:
-        url = next(c["image"] for c in
-                   data["output"]["choices"][0]["message"]["content"]
-                   if isinstance(c, dict) and c.get("image"))
+        url = next(
+            c["image"]
+            for c in data["output"]["choices"][0]["message"]["content"]
+            if isinstance(c, dict) and c.get("image")
+        )
     except Exception:
         try:
             url = data["output"]["results"][0]["url"]
         except Exception:
             url = None
+
     if not url:
-        raise RuntimeError(f"编辑调用失败: {model} 响应无图片")
+        raise RuntimeError("图像调用失败：响应无图片")
+
     img = requests.get(url, timeout=120)
     img.raise_for_status()
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(output_path).write_bytes(img.content)
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(img.content)
 
     try:
         with Image.open(output_path) as generated:
             generated.verify()
     except Exception as e:
-        Path(output_path).unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
         raise RuntimeError(f"生成结果不是有效图片: {e}")
-    print(f"model_used: {model}")
-    return model
+
+    return output_path
+
+
+def generate_base_scene(clean_src, template, output_path, size="1200*1600"):
+    """基础场景：完整手镯 + 空场景模板，不生成任何散珠；恰好一次调用，
+    不传任何代表件参考图。"""
+    return _call_wan(
+        [clean_src, template],
+        BASE_PROMPT,
+        output_path,
+        size=size,
+    )
+
+
+def insert_representative(canvas_path, representative_path, bbox_1000,
+                          output_path):
+    """逐件插入：Image 1 = 单件代表参考，Image 2 = 当前合成画布，
+    bbox 只在 Image 2 上，恰好一个选中区域；一次调用只插一件。"""
+    with Image.open(canvas_path) as canvas:
+        w, h = canvas.size
+
+    target_box = bbox1000_to_pixels(bbox_1000, w, h)
+
+    return _call_wan(
+        [representative_path, canvas_path],
+        INSERT_PROMPT,
+        output_path,
+        size=f"{w}*{h}",
+        bbox_list=[
+            [],
+            [target_box],
+        ],
+    )
+
+
+def compose_representatives(base_path, representative_paths, placements,
+                            output_path, workdir):
+    """顺序合成：按 reference 顺序每件恰好一次插入调用；这是生产流水线，
+    不是重试循环。N 组 = 1 次基础场景（已在 base 阶段）+ N 次插入。"""
+    if len(representative_paths) != len(placements):
+        raise ValueError("代表参考图数量与 placements 数量不一致")
+
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    current = Path(base_path)
+
+    for i, placement in enumerate(placements, 1):
+        ref_index = placement["reference_index"]
+        ref_path = representative_paths[ref_index - 1]
+
+        step_out = (
+            Path(output_path)
+            if i == len(placements)
+            else workdir / f"insert_{i:02d}.png"
+        )
+
+        insert_representative(
+            current,
+            ref_path,
+            placement["bbox_1000"],
+            step_out,
+        )
+        current = step_out
+
+    return Path(output_path)
 
 
 # ---------------------------------------------------------------- 编辑式标注
@@ -413,18 +533,24 @@ def render_labels(input_path, labels, output_path, font_size=34):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="水晶手镯参考图：清理裁剪 + 独立多参考图 + 一次 wan2.7-image-pro 编辑 + 本地编辑式标注")
+        description="水晶手镯参考图：base 场景生成 → placements → 逐件 bbox 插入 → 本地编辑式标注")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_run = sub.add_parser("run", help="清理裁剪 → 独立代表参考图 → 一次编辑调用 → 候选图")
-    p_run.add_argument("--input", required=True)
-    p_run.add_argument("--types", type=int, default=None,
-                       help="可选：显式组数；缺省用当前 analysis 的新鲜组数")
-    p_run.add_argument("--analysis", required=True)
-    p_run.add_argument("--output", required=True)
-    p_run.add_argument("--template", default=str(SKILL_DIR / "templates" / "04.jpg"))
-    p_run.add_argument("--size", default="1200*1600")
-    p_run.add_argument("--workdir", default=None)
+    p_base = sub.add_parser("base", help="清理裁剪 + 代表件裁剪 + 一次基础场景生成（无散珠）")
+    p_base.add_argument("--input", required=True)
+    p_base.add_argument("--analysis", required=True)
+    p_base.add_argument("--output", required=True)
+    p_base.add_argument("--template", default=str(SKILL_DIR / "templates" / "04.jpg"))
+    p_base.add_argument("--size", default="1200*1600")
+    p_base.add_argument("--workdir", default=None)
+
+    p_compose = sub.add_parser("compose", help="按 placements 逐件插入代表件（每件恰好一次调用，无重试）")
+    p_compose.add_argument("--input", required=True, help="base 阶段输出的场景图")
+    p_compose.add_argument("--source", required=True, help="原始手镯实拍图（重建代表件裁剪）")
+    p_compose.add_argument("--analysis", required=True)
+    p_compose.add_argument("--placements", required=True)
+    p_compose.add_argument("--output", required=True)
+    p_compose.add_argument("--workdir", default=None)
 
     p_lab = sub.add_parser("label", help="候选图 + labels.json → 成品图（纯本地）")
     p_lab.add_argument("--input", required=True)
@@ -434,10 +560,10 @@ def main():
 
     args = parser.parse_args()
 
-    if args.cmd == "run":
+    if args.cmd == "base":
         try:
             raw = json.loads(Path(args.analysis).read_text(encoding="utf-8"))
-            analysis = validate_analysis(raw, args.types)
+            analysis = validate_analysis(raw)
         except Exception as e:
             print(f"ERROR: analysis 校验失败: {e}")
             return 1
@@ -451,11 +577,38 @@ def main():
         print(f"clean_source: {clean_src}\n"
               f"representative crops: {[str(p) for p in representative_paths]}")
         try:
-            call_edit(clean_src, representative_paths, Path(args.template),
-                      args.output, analysis["bead_groups"], args.size)
+            generate_base_scene(clean_src, Path(args.template), args.output,
+                                args.size)
         except Exception as e:
             print(f"ERROR: {e}")
             return 2
+        print(f"model_used: {_image_model()}")
+        print(f"base: {args.output}")
+        return 0
+
+    if args.cmd == "compose":
+        try:
+            raw = json.loads(Path(args.analysis).read_text(encoding="utf-8"))
+            analysis = validate_analysis(raw)
+            raw_p = json.loads(Path(args.placements).read_text(encoding="utf-8"))
+            placements = validate_placements(raw_p, len(analysis["bead_groups"]))
+        except Exception as e:
+            print(f"ERROR: analysis/placements 校验失败: {e}")
+            return 1
+        work = Path(args.workdir) if args.workdir else \
+            Path(tempfile.mkdtemp(prefix="crystal_"))
+        work.mkdir(parents=True, exist_ok=True)
+        # 代表件裁剪确定性重建：同输入同 bbox 产物一致，与 base 阶段等价可复用
+        representative_paths = build_representative_crops(
+            args.source, analysis["bead_groups"], work / "references")
+        try:
+            compose_representatives(args.input, representative_paths,
+                                    placements, args.output, work / "inserts")
+        except Exception as e:
+            print(f"ERROR: {e}")
+            return 2
+        print(f"model_used: {_image_model()}")
+        print(f"insertion_calls: {len(placements)}")
         print(f"candidate: {args.output}")
         return 0
 
