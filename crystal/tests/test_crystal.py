@@ -78,6 +78,29 @@ assert "about half their diameter" not in src_text, "代表珠不得故意缩小
 assert "plain bare bead" not in src_text, "不得指示模型去金属帽合成裸珠"
 assert "AUTH_TOKEN" not in src_text, "凭证只允许 DASHSCOPE_API_KEY"
 assert "removed from the bracelet" in src_text, "散珠须同物理尺寸（像从手镯取下）"
+assert "bead #1" not in src_text, "顺序规则不得硬编码 N==3"
+assert "lower side" not in src_text, "构图不得固定下侧弧线"
+assert "{n}" in src_text, "Prompt 须保持 {n} 参数化"
 print("[ok] 物理尺度/范围/凭证口径守卫")
+
+# 8) 参考页公共比例：不同尺寸 bbox 的相对表观尺寸保持比例
+from PIL import ImageDraw  # noqa: E402
+canvas2 = Image.new("RGB", (1000, 1000), (210, 210, 210))
+ImageDraw.Draw(canvas2).rectangle([400, 400, 599, 599], fill=(0, 0, 255))
+canvas2.save(OUT / "t_src.png")
+crs2 = [{"name": "A", "bbox_1000": [100, 100, 200, 200]},   # 100x100
+        {"name": "B", "bbox_1000": [400, 400, 600, 600]}]   # 200x200
+p1 = crystal.build_bead_sheet(OUT / "t_src.png", crs2, OUT / "t_sheet_s1.png", gap=40)
+s1 = Image.open(p1)
+assert s1.size == (100 + 40 + 200, 200), "未超限时须保留原始相对尺寸（不拉成同高）"
+assert s1.crop((140, 0, 340, 200)).size == (200, 200), "大珠在参考页仍为小珠 2 倍"
+p2 = crystal.build_bead_sheet(OUT / "t_src.png", crs2, OUT / "t_sheet_s2.png",
+                              gap=40, max_width=170)
+s2 = Image.open(p2)
+scale = 170 / (100 + 40 + 200)
+h_small, h_large = max(8, int(round(100 * scale))), max(8, int(round(200 * scale)))
+assert s2.height == h_large, "整页超限时用同一公共因子等比缩小"
+assert abs(h_large / h_small - 2.0) < 0.1, "缩小后相对比例仍须保持"
+print("[ok] 参考页公共比例保留相对尺寸")
 
 print("\nALL CRYSTAL CHECKS PASSED")

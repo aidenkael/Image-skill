@@ -155,19 +155,32 @@ def build_clean_source(input_path, bbox_1000, out_path, margin=0.06):
     return Path(out_path)
 
 
-def build_bead_sheet(input_path, crystals, out_path, height=420, gap=40):
-    """代表珠参考页：矩形原始裁剪，左→右按识别顺序，无抠图无改色。"""
+def build_bead_sheet(input_path, crystals, out_path, gap=40, max_width=1600, max_height=520):
+    """代表珠参考页：同一源图的矩形原始裁剪，左→右按识别顺序。
+
+    所有裁剪共用一个缩放因子（仅当整页超限才等比缩小），
+    保留源图中代表珠的相对表观尺寸；页面只加中性间隙，
+    不暗示不同珠类物理尺寸相同。"""
     im = Image.open(input_path).convert("RGB")
     w, h = im.size
     crops = [im.crop(bbox1000_to_pixels(c["bbox_1000"], w, h))
              for c in crystals]
-    rs = [c.resize((max(8, int(c.width * height / c.height)), height),
-                   Image.LANCZOS) for c in crops]
-    sheet = Image.new("RGB", (sum(r.width for r in rs) + gap * (len(rs) - 1),
-                              height), (245, 245, 245))
+    total_w = sum(c.width for c in crops) + gap * (len(crops) - 1)
+    max_h = max(c.height for c in crops)
+    scale = min(1.0, max_width / total_w, max_height / max_h)
+    scaled = []
+    for c in crops:
+        if scale < 1.0:
+            c = c.resize((max(8, int(round(c.width * scale))),
+                          max(8, int(round(c.height * scale)))),
+                         Image.LANCZOS)
+        scaled.append(c)
+    sheet_h = max(r.height for r in scaled)
+    sheet = Image.new("RGB", (sum(r.width for r in scaled) + gap * (len(scaled) - 1),
+                              sheet_h), (245, 245, 245))
     x = 0
-    for r in rs:
-        sheet.paste(r, (x, 0))
+    for r in scaled:
+        sheet.paste(r, (x, (sheet_h - r.height) // 2))
         x += r.width + gap
     sheet.save(out_path)
     return Path(out_path)
@@ -179,17 +192,18 @@ EDIT_PROMPT = """Create a photorealistic jewelry reference photo, as if carefull
 
 Reference roles:
 - Image 1 is the only source of truth for the bracelet.
-- Image 2 contains {n} representative bead references, left to right.
+- Image 2 contains exactly {n} representative crops in left-to-right order.
 - Image 3 is only the empty scene/background reference.
 
 Composition:
 - One complete bracelet as the main subject, placed naturally in the scene.
 - Preserve bracelet structure, bead colors, translucency, inclusions, shapes, relative sizes and metal accessories from Image 1.
 - Do not redesign the bracelet; do not add or remove components; do not invent bead types or shapes.
-- Near the bracelet (a gentle loose arc at its lower side), place exactly {n} loose representative beads, one per crop in Image 2. Not more, not fewer.
-- Bead order is critical and must be preserved exactly: reading Image 2 from left to right, bead #1 goes to the left, bead #2 next to it, bead #3 to the right. Never swap, reorder or substitute them.
+- Generate exactly {n} loose representative beads, one per crop in Image 2. Not more, not fewer.
+- Preserve one-to-one correspondence and the same left-to-right identity order for all {n} items. Never duplicate, omit, swap, or substitute any representative type.
 - Each loose bead must look as if the actual bead was removed from the bracelet and set down beside it: approximately the same real-world diameter as its corresponding bracelet bead, with only minor apparent-size variation from perspective. Never enlarge it into a separate hero object; never intentionally shrink it.
-- Do NOT arrange the loose beads in a rigid centered straight row; avoid mechanical equal spacing.
+- Place the representative beads naturally near the bracelet, as if deliberately arranged by a human jewelry photographer: use asymmetry and natural spacing when appropriate, preserve comfortable negative space, and keep the representative beads secondary to the complete bracelet.
+- Avoid rigid row/grid/equal-spacing/template-like placement.
 - Each loose bead must preserve exactly what its source crop visibly shows (material, color, transparency, inclusions, shape). Keep the visible reference as-is; never reconstruct unseen areas, and never remove a metal cap or fitting to synthesize the crystal surface beneath it.
 - No loose metal accessories.
 
@@ -202,7 +216,8 @@ Text:
 - generate no text, no labels, no title, no watermark, no logo"""
 
 NEGATIVE = ("extra bracelet, redesigned bracelet, changed bead type, invented beads, extra loose beads, "
-            "missing beads, loose metal accessories, rigid row, mechanical layout, equal spacing, text, "
+            "missing beads, loose metal accessories, rigid row, grid, mechanical layout, equal spacing, "
+            "template-like placement, text, "
             "labels, title, watermark, infographic, poster, collage, sticker cutout, white halo, "
             "floating object, fake transparency, plastic texture, CGI, illustration")
 
