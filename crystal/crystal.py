@@ -168,6 +168,9 @@ def build_bead_sheet(input_path, crystals, out_path, gap=40, max_width=1600, max
     n = len(crops)
     crop_w = sum(c.width for c in crops)
     avail_w = max_width - gap * (n - 1)
+    if avail_w <= 0:
+        raise ValueError(f"参考页配置非法：固定间隙已占满 max_width"
+                         f"（available_width={avail_w}），请增大 max_width 或减小 gap")
     max_h = max(c.height for c in crops)
     scale = min(1.0, avail_w / crop_w, max_height / max_h)
     scaled = []

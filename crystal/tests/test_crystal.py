@@ -109,4 +109,13 @@ s3 = Image.open(p3)
 assert s3.width <= 1600 and s3.height <= 120, "高度上限同样须满足"
 print("[ok] 参考页公共比例保留相对尺寸且满足页面上限")
 
+# 9) 参考页配置校验：固定间隙单独占满/超过 max_width 时拒绝（ValueError，不静默夹紧）
+try:
+    crystal.build_bead_sheet(OUT / "t_src.png", crs2, OUT / "t_sheet_bad.png",
+                             gap=40, max_width=40)  # avail_w = 40-40 = 0
+    raise SystemExit("FAIL: avail_w<=0 应抛 ValueError")
+except ValueError:
+    pass
+print("[ok] 参考页拒绝 avail_w<=0 非法配置")
+
 print("\nALL CRYSTAL CHECKS PASSED")
