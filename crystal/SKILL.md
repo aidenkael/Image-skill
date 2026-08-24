@@ -1,85 +1,58 @@
 ---
 name: crystal
-description: '水晶手镯识别展示图（Agent-native，本地合成，0 API 调用）。Agent 自身多模态识别恰好 N 种水晶（忽略金属件）并写出归一化分析 JSON → 本地 crystal.py 用 rembg 提取原始手镯与每类一颗代表珠 → 6 个固定实拍场景之一合成 + 中文名标签 + 接触阴影 → Agent 独立视觉 QA。Use when the user says "识别水晶", "识别珠子", "水晶标注图", "珠子种类展示", "这条有几种珠子", "crystal bracelet", "crystal identification image" — i.e. any request to identify crystal types in a bracelet photo and produce a labeled showcase image.'
-license: MIT
-metadata:
-  author: image-skill
-  source: thin orchestration ideas from ecom-shot (fidelity + QA principles); extraction via rembg (u2net); geometry/compositing via OpenCV + Pillow
-  skill_id: crystal
-  version: "2.0"
+description: 水晶手镯参考图——清理裁剪 + Agent 识别 + 珠子参考页 + 一次生成式编辑 + 本地编辑式标注。
 ---
 
-# crystal（水晶手镯识别展示图 · Agent-native 本地合成）
+# crystal 技能
 
-输入一张手镯照片 + 种类数 N，产出一张 3:4 展示图：原始手镯 + 每类水晶一颗代表珠 + 中文名标签。**识别与 QA 由执行本技能的多模态 Agent 自身完成**；本地 Python 只做像素提取与合成，全程零网络/API 调用，手镯与珠子像素 100% 来自原图。
+输入：一张手镯实拍图 + 水晶种类数 N。输出：一张像"人工摆拍并手工标注的珠宝参考照片"的成品图。
 
-**边界（MUST）**：
-- 本地代码不调用任何模型 API（无生图、无视觉 HTTP 层）。
-- 只识别水晶珠子；金属件（隔珠/吊坠/搭扣/转运珠金属件）一律不识别、不标注。
-- 标签只写中文水晶市场名；不写标题、营销文案、水印、置信度、"疑似/可能"等措辞。
-- 场景固定 6 个（批准实拍资产），Agent 不得新建/生成背景。
-
-## Agent 工作流（严格执行）
+## 主流水线（生成式编辑，唯一主路径）
 
 ```
-source image + type_count（缺 type_count 时只问这一个值）
-→ Agent 视觉识别恰好 N 种水晶（中文市场名；图像是唯一事实来源；
-  光照/反光差异不算不同种类；不确定时给最佳市场名，confidence 仅内部）
-→ Agent 为每类独立选一颗最清晰代表珠，给出 bbox_1000（0..1000 归一化）
-  与 shape（round/square/faceted/irregular），并给 bracelet_bbox_1000
-→ Agent 写临时分析 JSON（如 crystal/tests/outputs/analysis.json）
-→ 运行本地合成：
-    python crystal/crystal.py --input <图> --types N \
-        --analysis <json> --output <result.jpg> --scene auto
-→ Agent 视觉对比 SOURCE 与 RESULT，独立复检：
-  水晶命名（重新评估，不得把第一轮名称当 ground truth）、代表珠选择、
-  手镯完整性、标签文字、构图自然度
-→ 若明显错误：修正分析 JSON，本地重跑合成一次（最多一次）
-→ 返回成品图（附识别名称清单；如重跑后仍有问题，如实说明）
+源图 → 清理裁剪（紧圈手镯，排除包装/手/纸张）
+     → Agent 识别恰好 N 类水晶 + 每类选一颗代表珠
+     → 珠子参考页（矩形原始裁剪，左→右）
+     → 一次 qwen 图像编辑调用（清理源图 + 参考页 + 固定场景模板 04）
+     → 本地 Pillow 编辑式标注（小字楷体 + 可选细引线）
+     → 成品图
 ```
 
-## 分析 JSON 约定
+不使用 rembg/SAM/本地抠图合成做主路径：半透明水晶在杂乱实拍下抠图必然带膜状暗边/纸张残留，
+且本地合成只能产出贴纸感与机械底排，与目标风格根本冲突。
 
-```json
-{
-  "bracelet_bbox_1000": [x1, y1, x2, y2],
-  "crystals": [
-    {
-      "name": "紫水晶",
-      "bbox_1000": [x1, y1, x2, y2],
-      "shape": "round",
-      "confidence": 0.92
-    }
-  ]
-}
-```
+## Agent 工作流
 
-- `crystals` 恰好 N 项；坐标 0..1000；`confidence` 仅内部、永不渲染。
-- crystal.py 强校验：种类数不符 / 坐标越界 → 退出码 1 并报错。
+1. **目视识别**：恰好 N 类水晶；金属隔珠/银饰忽略；包装、说明纸、消磁碎石袋等背景不得污染识别
+   （若白水晶消磁碎石属于商品内容，可计一类并以其裁剪为代表）。
+2. **写 `analysis.json`**（0..1000 归一化坐标）：
+   - `bracelet_bbox_1000` 紧圈手镯环体（排除手、包装盒、纸张）；
+   - `crystals` 恰好 N 项：`{"name": 中文市场名, "bbox_1000": 代表珠矩形}`；
+   - 名称不写"疑似/可能"等措辞（代码会清洗）。
+3. **运行**：`python crystal/crystal.py run --input 原图 --types N --analysis analysis.json --output candidate.png`
+   （内部：清理裁剪 → 参考页 → 一次编辑调用；模型首选 qwen-image-3.0-pro，回退 qwen-image-2.0-pro）。
+4. **独立目视 QA** 候选图：手镯保真、恰好 N 颗散珠、与参考页一一对应、布局自然（非机械底排）、
+   无文字。不可用则如实报告，不自动重跑生成。
+5. **写 `labels.json`**：按生成图中散珠实际摆放就近放名——小字、克制、错落而非居中对齐；
+   可选 `point_to` 细引线指向对应散珠（编辑/手写注记感）。
+6. **运行**：`python crystal/crystal.py label --input candidate.png --labels labels.json --output final.png`，返回成品。
 
-## 场景表（6 个固定场景，--scene 1-6 确定，auto 随机）
+## 风格约束（已内置于编辑 Prompt）
 
-| --scene | 场景 |
-|---|---|
-| 1 | 米色亚麻珠宝托盘 |
-| 2 | 黑色丝绒珠宝托盘 |
-| 3 | 浅木桌面 + 亚麻托盘 |
-| 4 | 中性石材 + 陶瓷圆盘 |
-| 5 | 深色木纹 + 暖色侧光 |
-| 6 | 浅灰亚麻 + 陶瓷圆盘 |
+- 完整手镯为主体；散珠明显更小、自然散落于手镯旁（松散弧线），同一场景物理感；
+- 禁止刚性居中直排/等距机械布局；禁止信息图/海报感；
+- 生成阶段不产生任何文字；标注阶段仅渲染 N 个中文名，无标题/副标题/营销文案/水印。
 
-## 文件
+## 凭证与模型
 
-| 文件 | 内容 |
-|---|---|
-| `crystal.py` | 唯一 CLI 入口（纯本地） |
-| `image_ops.py` | 分析校验 / bbox 转换 / rembg 提取（u2net 会话复用）/ 合成 |
-| `scenes.yaml` | 6 场景 3:4 布局配置 |
-| `templates/0X.jpg` | 批准的实拍场景资产（1200x1600，可同名替换） |
-| `tests/test_mock.py` | 零网络 mock 验证 |
+- 凭证仅经 `.env`/环境变量：`DASHSCOPE_API_KEY`（或环境可用的 Token Plan bearer）；
+- 端点：`DASHSCOPE_API_URL` 可覆盖，默认 Token Plan 端点；
+- 模型：`QWEN_EDIT_MODEL` 可覆盖，默认 `qwen-image-3.0-pro`，回退 `qwen-image-2.0-pro`。
 
-## 保真与 QA 原则（沿用 ecom-shot 思路）
+## 资产
 
-- 图像是唯一商品事实来源：不描述、不生成原图不存在的结构。
-- 代表珠必须使用原图像素；合成只做摆放、接触阴影与标签。
-- 第二轮视觉 QA 必须独立重新评估命名与选珠，不自我印证第一轮结果。
+- `templates/04.jpg` 为当前唯一批准场景模板（`--template` 可换，但先保证单场景正确）。
+
+## 退出码
+
+0 成功；1 校验/本地错误；2 编辑调用失败（不自动重试）。

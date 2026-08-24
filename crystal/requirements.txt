@@ -1,6 +1,3 @@
-# crystal 技能最小本地依赖（零网络/API 运行时；rembg 模型仅首次缓存到用户目录）
-rembg
-onnxruntime
-opencv-python-headless
+# rembg 已移除：本技能不再做本地抠图合成。
+requests
 Pillow
-PyYAML

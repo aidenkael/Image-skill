@@ -1,56 +1,50 @@
-# crystal — 水晶手镯识别展示图（Agent-native）
+# crystal — 水晶手镯参考图技能
 
-一张手镯图 + 种类数 N → 一张 3:4 展示图：原始手镯 + 每类水晶一颗代表珠 + 中文名标签。
+输入一张手镯实拍图 + 种类数 N，输出一张"人工摆拍 + 手工标注"感的珠宝参考照片：
+完整手镯为主体，N 颗更小的代表珠自然散落其旁，小字楷体中文注记（可带细引线）。
 
-- **识别与 QA 由执行技能的多模态 Agent 自身完成**；本地 Python 零网络/API 调用
-- 手镯与代表珠像素 100% 来自原图（rembg u2net 提取，会话复用），不重绘、不重建
-- 金属件不识别、不标注；标签只写中文水晶市场名
-- 6 个批准的固定实拍场景（3:4），`--scene 1-6` 确定、`auto` 随机
+## 主流水线（生成式编辑）
+
+```
+源图清理裁剪 → Agent 识别 N 类 + 代表珠 → 珠子参考页
+→ 一次 qwen 图像编辑调用（清理源图 + 参考页 + templates/04.jpg）
+→ 本地 Pillow 编辑式标注 → 成品图
+```
+
+旧 rembg 本地抠图合成已移除（贴纸感/机械底排/膜状暗边，方向错误）。
 
 ## 安装
 
-```bash
+```
 pip install -r crystal/requirements.txt
 ```
 
-无需任何 API Key。首次运行时 rembg 会缓存 u2net 模型到用户目录（不进仓库）；
-可用环境变量 `CRYSTAL_REMBG_MODEL` 覆盖模型名。
+凭证经 `.env`/环境变量（不硬编码）：`DASHSCOPE_API_KEY`（或环境 Token Plan bearer）；
+可选 `DASHSCOPE_API_URL`、`QWEN_EDIT_MODEL`（默认 qwen-image-3.0-pro，回退 qwen-image-2.0-pro）。
 
-## 使用
-
-Agent 先对原图做视觉分析，写出分析 JSON（坐标 0..1000 归一化）：
-
-```json
-{
-  "bracelet_bbox_1000": [x1, y1, x2, y2],
-  "crystals": [
-    {"name": "紫水晶", "bbox_1000": [x1, y1, x2, y2], "shape": "round", "confidence": 0.92}
-  ]
-}
-```
-
-然后本地合成：
-
-```bash
-python crystal/crystal.py \
-  --input path/to/source.jpg \
-  --types 3 \
-  --analysis analysis.json \
-  --output crystal/tests/outputs/result.jpg \
-  --scene auto        # 或 1-6
-```
-
-退出码：`0` 成功；`1` 输入/校验错误。合成后由 Agent 独立视觉 QA，必要时修正
-分析 JSON 并重跑一次。
-
-## 目录
+## 用法
 
 ```
-crystal/
-├── SKILL.md           Agent 技能入口（工作流 + 分析约定）
-├── crystal.py         唯一 CLI（纯本地）
-├── image_ops.py       校验 / bbox 转换 / rembg 提取 / 合成
-├── scenes.yaml        6 场景 3:4 布局
-├── templates/         批准的实拍场景资产（1200x1600）
-└── tests/             test_mock.py / samples / outputs（outputs 不进 Git）
+# 1) Agent 识别后写 analysis.json（bracelet_bbox_1000 + 恰好 N 个 crystals）
+python crystal/crystal.py run --input src.jpg --types 3 \
+    --analysis analysis.json --output candidate.png
+
+# 2) Agent 目视 QA 候选图后写 labels.json（小字就近标注，可选 point_to 引线）
+python crystal/crystal.py label --input candidate.png \
+    --labels labels.json --output final.png
+```
+
+## 结构
+
+| 文件 | 内容 |
+|---|---|
+| `crystal.py` | 唯一运行时入口（run / label） |
+| `SKILL.md` | Agent 工作流与风格约束 |
+| `templates/04.jpg` | 当前唯一批准场景模板 |
+| `tests/test_crystal.py` | 本地验证（无网络） |
+
+## 测试
+
+```
+python crystal/tests/test_crystal.py
 ```
