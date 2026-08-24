@@ -21,12 +21,12 @@ pip install -r crystal/requirements.txt
 
 凭证经 `.env`/环境变量（不硬编码）：仅 `DASHSCOPE_API_KEY`，无其他回退；
 端点解析：`DASHSCOPE_API_URL` 优先，`sk-sp-` key 走 Token Plan 端点（见根 `.env.example`），否则 DashScope 标准端点；
-可选 `QWEN_EDIT_MODEL`（默认 qwen-image-3.0-pro，回退 qwen-image-2.0-pro）。
+可选 `QWEN_EDIT_MODEL`（默认 qwen-image-3.0-pro；single-pass，失败不回退重试）。
 
 ## 用法
 
 ```
-# 1) Agent 识别后写 analysis.json（bracelet_bbox_1000 + 恰好 N 个 crystals，均为手镯上的珠类）
+# 1) Agent 识别后写 analysis.json（bracelet_bbox_1000 + 恰好 N 个 bead_groups，均为手镯上的珠类）
 python crystal/crystal.py run --input src.jpg --types 3 \
     --analysis analysis.json --output candidate.png
 

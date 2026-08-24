@@ -18,18 +18,38 @@ src_text = (Path(crystal.__file__)).read_text(encoding="utf-8")
 assert "import rembg" not in src_text and "import cv2" not in src_text, "主流水线不得回到 rembg/本地合成"
 print("[ok] 主流水线无 rembg/cv2 依赖")
 
-# 2) analysis 校验：恰好 N
+# 2) analysis 校验：bead_groups 严格 schema + 恰好 N + 代表珠在手镯上
 good = {"bracelet_bbox_1000": [200, 200, 800, 800],
-        "crystals": [{"name": "紫水晶", "bbox_1000": [300, 300, 400, 400]},
-                     {"name": "白水晶", "bbox_1000": [500, 300, 600, 400]}]}
+        "bead_groups": [
+            {"group_id": "g1", "label_name": "紫水晶", "shape": "round", "size_tier": "medium",
+             "color_family": "purple", "material_traits": "translucent with inclusions",
+             "representative_bbox_1000": [300, 300, 400, 400]},
+            {"group_id": "g2", "label_name": "白水晶", "shape": "square", "size_tier": "large",
+             "color_family": "clear", "material_traits": "translucent",
+             "representative_bbox_1000": [500, 300, 600, 400]}]}
 a = crystal.validate_analysis(good, 2)
-assert [c["name"] for c in a["crystals"]] == ["紫水晶", "白水晶"]
+assert [g["label_name"] for g in a["bead_groups"]] == ["紫水晶", "白水晶"]
 try:
     crystal.validate_analysis(good, 3)
     raise SystemExit("FAIL: 种类数校验失效")
 except ValueError:
     pass
-print("[ok] validate_analysis 恰好 N 强校验")
+import copy  # noqa: E402
+bad_shape = copy.deepcopy(good)
+bad_shape["bead_groups"][0]["shape"] = "triangle"
+try:
+    crystal.validate_analysis(bad_shape, 2)
+    raise SystemExit("FAIL: shape 枚举校验失效")
+except ValueError:
+    pass
+bad_out = copy.deepcopy(good)
+bad_out["bead_groups"][0]["representative_bbox_1000"] = [50, 50, 90, 90]  # 手镯环体外
+try:
+    crystal.validate_analysis(bad_out, 2)
+    raise SystemExit("FAIL: 代表珠必须来自手镯环体")
+except ValueError:
+    pass
+print("[ok] validate_analysis bead_groups 严格 schema + 恰好 N + 代表珠在手镯上")
 
 # 3) bbox_1000 转换与夹紧
 px = crystal.bbox1000_to_pixels([0, 0, 1000, 1000], 1200, 1600)
@@ -38,7 +58,7 @@ print("[ok] bbox_1000 转换")
 
 # 4) 清理裁剪 + 参考页（本地 Pillow）
 clean = crystal.build_clean_source(SAMPLE, good["bracelet_bbox_1000"], OUT / "t_clean.jpg")
-sheet = crystal.build_bead_sheet(SAMPLE, good["crystals"], OUT / "t_sheet.png")
+sheet = crystal.build_bead_sheet(SAMPLE, good["bead_groups"], OUT / "t_sheet.png")
 assert clean.exists() and sheet.exists()
 print("[ok] clean_source + bead_sheet:", sheet)
 
@@ -83,15 +103,19 @@ assert "lower side" not in src_text, "构图不得固定下侧弧线"
 assert "left-to-right identity order" not in src_text, "不得要求生成珠保持左/右空间顺序"
 assert "indexing convention" in src_text, "左→右仅为身份/索引约定"
 assert "{n}" in src_text, "Prompt 须保持 {n} 参数化"
-print("[ok] 物理尺度/范围/凭证口径守卫")
+assert "qwen-image-2.0-pro" not in src_text, "single-pass：不得有模型回退重试"
+assert "_models" not in src_text, "single-pass：不得有模型列表重试循环"
+assert "bead_groups" in src_text and "size_tier" in src_text, "analysis 须用视觉结构分组 schema"
+assert "never more, never fewer" in src_text, "Prompt 须硬约束散珠总数 == N"
+print("[ok] 物理尺度/范围/凭证口径守卫 + single-pass 守卫")
 
 # 8) 参考页公共比例：不同尺寸 bbox 的相对表观尺寸保持比例
 from PIL import ImageDraw  # noqa: E402
 canvas2 = Image.new("RGB", (1000, 1000), (210, 210, 210))
 ImageDraw.Draw(canvas2).rectangle([400, 400, 599, 599], fill=(0, 0, 255))
 canvas2.save(OUT / "t_src.png")
-crs2 = [{"name": "A", "bbox_1000": [100, 100, 200, 200]},   # 100x100
-        {"name": "B", "bbox_1000": [400, 400, 600, 600]}]   # 200x200
+crs2 = [{"label_name": "A", "representative_bbox_1000": [100, 100, 200, 200]},   # 100x100
+        {"label_name": "B", "representative_bbox_1000": [400, 400, 600, 600]}]   # 200x200
 p1 = crystal.build_bead_sheet(OUT / "t_src.png", crs2, OUT / "t_sheet_s1.png", gap=40)
 s1 = Image.open(p1)
 assert s1.size == (100 + 40 + 200, 200), "未超限时须保留原始相对尺寸（不拉成同高）"

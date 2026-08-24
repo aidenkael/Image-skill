@@ -17,9 +17,16 @@
 
 analysis.json（坐标 0..1000 归一化；bracelet_bbox 紧圈手镯以排除包装/手/纸张）:
     {"bracelet_bbox_1000": [x1,y1,x2,y2],
-     "crystals": [{"name": "锂云母", "bbox_1000": [x1,y1,x2,y2]}, ...]}  # 恰好 N，且均为手镯上的珠类
-crystals 只统计物理位于手镯环体上的水晶珠类，代表珠裁剪也必须来自环体本身；
-包装/消磁碎石/散石/纸张/背景中任何类水晶物体不得计为一类。
+     "bead_groups": [
+       {"group_id": "g1", "label_name": "中文市场名",
+        "shape": "round|square|faceted|barrel|other",
+        "size_tier": "small|medium|large",
+        "color_family": "色族", "material_traits": "视觉材质注记",
+        "representative_bbox_1000": [x1,y1,x2,y2]}, ...]}  # 恰好 N
+珠类分组由「形状 + 相对尺寸档 + 材质/色族 + 内部纹理」的可见组合决定；
+同色族但形状或尺寸档不同的珠必须分为不同组；
+bead_groups 只统计物理位于手镯环体上的珠类，代表珠必须裁自环体本身；
+金属隔珠/银饰/包装/消磁碎石/散石/纸张/背景中任何类水晶物体不得计为一组。
 
 labels.json（像素坐标，位置应呼应生成图中散珠摆放，小字、克制、可带细引线）:
     {"labels": [{"text": "锂云母", "x": 372, "y": 1330,
@@ -89,16 +96,6 @@ def _endpoint():
     return DASHSCOPE_ENDPOINT
 
 
-def _models():
-    pref = os.environ.get("QWEN_EDIT_MODEL", "qwen-image-3.0-pro")
-    seen, models = set(), []
-    for m in (pref, "qwen-image-2.0-pro"):
-        if m not in seen:
-            seen.add(m)
-            models.append(m)
-    return models
-
-
 # ---------------------------------------------------------------- 分析校验
 
 def clean_name(name):
@@ -121,25 +118,61 @@ def bbox1000_to_pixels(bbox, width, height):
     return px
 
 
+_SHAPES = ("round", "square", "faceted", "barrel", "other")
+_TIERS = ("small", "medium", "large")
+
+
+def _check_bbox(bbox, label):
+    if not all(0.0 <= v <= 1000.0 for v in bbox):
+        raise ValueError(f"{label} 超出 0-1000: {bbox}")
+
+
 def validate_analysis(raw, type_count):
+    """严格 bead_groups schema：形状/尺寸档/色族/材质齐全，代表珠必须位于手镯环体内。"""
     if not isinstance(raw, dict):
         raise ValueError("analysis 必须是 JSON 对象")
-    crystals = raw.get("crystals")
-    if not isinstance(crystals, list):
-        raise ValueError("analysis 缺少 crystals 列表")
-    if len(crystals) != type_count:
-        raise ValueError(f"水晶种类数不符: analysis 提供 {len(crystals)} 种，"
-                         f"要求恰好 {type_count} 种手镯上的水晶珠类")
-    cleaned = []
-    for i, c in enumerate(crystals):
-        if not isinstance(c, dict) or not isinstance(c.get("bbox_1000"), (list, tuple)):
-            raise ValueError(f"crystals[{i}] 非法")
-        cleaned.append({"name": clean_name(c.get("name", "")),
-                        "bbox_1000": [float(v) for v in c["bbox_1000"]]})
+    groups = raw.get("bead_groups")
+    if not isinstance(groups, list):
+        raise ValueError("analysis 缺少 bead_groups 列表")
+    if len(groups) != type_count:
+        raise ValueError(f"珠类组数不符: analysis 提供 {len(groups)} 组，"
+                         f"要求恰好 {type_count} 组手镯上的珠类")
     bb = raw.get("bracelet_bbox_1000")
     if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
         raise ValueError(f"bracelet_bbox_1000 非法: {bb}")
-    return {"bracelet_bbox_1000": [float(v) for v in bb], "crystals": cleaned}
+    bb = [float(v) for v in bb]
+    _check_bbox(bb, "bracelet_bbox_1000")
+    cleaned = []
+    for i, g in enumerate(groups):
+        if not isinstance(g, dict):
+            raise ValueError(f"bead_groups[{i}] 非法")
+        shape = str(g.get("shape", "")).strip().lower()
+        if shape not in _SHAPES:
+            raise ValueError(f"bead_groups[{i}].shape 非法: {shape}（须为 {_SHAPES} 之一）")
+        tier = str(g.get("size_tier", "")).strip().lower()
+        if tier not in _TIERS:
+            raise ValueError(f"bead_groups[{i}].size_tier 非法: {tier}（须为 {_TIERS} 之一）")
+        color_family = str(g.get("color_family", "")).strip()
+        if not color_family:
+            raise ValueError(f"bead_groups[{i}].color_family 缺失")
+        traits = str(g.get("material_traits", "")).strip()
+        if not traits:
+            raise ValueError(f"bead_groups[{i}].material_traits 缺失")
+        rb = g.get("representative_bbox_1000")
+        if not (isinstance(rb, (list, tuple)) and len(rb) == 4):
+            raise ValueError(f"bead_groups[{i}].representative_bbox_1000 非法: {rb}")
+        rb = [float(v) for v in rb]
+        _check_bbox(rb, f"bead_groups[{i}].representative_bbox_1000")
+        if not (rb[0] >= bb[0] - 1 and rb[1] >= bb[1] - 1 and
+                rb[2] <= bb[2] + 1 and rb[3] <= bb[3] + 1):
+            raise ValueError(f"bead_groups[{i}] 代表珠必须来自手镯环体"
+                             f"（不得取自包装/散石/背景）")
+        cleaned.append({"group_id": str(g.get("group_id", f"g{i+1}")).strip() or f"g{i+1}",
+                        "label_name": clean_name(g.get("label_name", "")),
+                        "shape": shape, "size_tier": tier,
+                        "color_family": color_family, "material_traits": traits,
+                        "representative_bbox_1000": rb})
+    return {"bracelet_bbox_1000": bb, "bead_groups": cleaned}
 
 
 # ---------------------------------------------------------------- 本地准备
@@ -155,7 +188,7 @@ def build_clean_source(input_path, bbox_1000, out_path, margin=0.06):
     return Path(out_path)
 
 
-def build_bead_sheet(input_path, crystals, out_path, gap=40, max_width=1600, max_height=520):
+def build_bead_sheet(input_path, groups, out_path, gap=40, max_width=1600, max_height=520):
     """代表珠参考页：同一源图的矩形原始裁剪，左→右按识别顺序。
 
     所有裁剪共用一个缩放因子（仅当整页超限才等比缩小），
@@ -163,8 +196,8 @@ def build_bead_sheet(input_path, crystals, out_path, gap=40, max_width=1600, max
     保留源图中代表珠的相对表观尺寸，不暗示不同珠类物理尺寸相同。"""
     im = Image.open(input_path).convert("RGB")
     w, h = im.size
-    crops = [im.crop(bbox1000_to_pixels(c["bbox_1000"], w, h))
-             for c in crystals]
+    crops = [im.crop(bbox1000_to_pixels(g["representative_bbox_1000"], w, h))
+             for g in groups]
     n = len(crops)
     crop_w = sum(c.width for c in crops)
     avail_w = max_width - gap * (n - 1)
@@ -200,23 +233,23 @@ Reference roles:
 - Image 2 is the representative bead reference sheet; its left-to-right order is only an identity/indexing convention.
 - Image 3 is only the empty scene/background reference.
 
-Composition:
-- One complete bracelet as the main subject, placed naturally in the scene.
-- Preserve bracelet structure, bead colors, translucency, inclusions, shapes, relative sizes and metal accessories from Image 1.
-- Do not redesign the bracelet; do not add or remove components; do not invent bead types or shapes.
-- Image 2 contains exactly {n} distinct representative bead references.
-- Generate each representative type exactly once.
-- Preserve one-to-one identity correspondence with Image 2.
-- Never duplicate, omit, merge, or substitute a representative type.
-- Their final spatial arrangement is free and should be chosen for the most natural hand-arranged jewelry composition; no reference is tied to a particular left/right position.
+Bracelet (main subject):
+- One complete bracelet as the clear main subject.
+- Preserve bracelet structure, bead order, bead shapes, size tiers, colors, translucency, inclusions and metal accessories from Image 1.
+- Do not redesign the bracelet; do not add, remove, merge or substitute any bead or metal part.
+
+Representative beads (secondary):
+- Exactly {n} loose beads in the whole image: never more, never fewer.
+- One loose bead per group below; the list order matches the references in Image 2 (indexing convention only).
+{groups}
+- Each loose bead must visibly match its group: same shape (round stays round; square/faceted stays square/faceted), same size tier relative to the bracelet beads, same color family and material traits (opaque stays opaque; translucent stays translucent; inclusions kept).
 - Each loose bead must look as if the actual bead was removed from the bracelet and set down beside it: approximately the same real-world diameter as its corresponding bracelet bead, with only minor apparent-size variation from perspective. Never enlarge it into a separate hero object; never intentionally shrink it.
-- Place the representative beads naturally near the bracelet, as if deliberately arranged by a human jewelry photographer: use asymmetry and natural spacing when appropriate, preserve comfortable negative space, and keep the representative beads secondary to the complete bracelet.
-- Avoid rigid row/grid/equal-spacing/template-like placement.
-- Each loose bead must preserve exactly what its source crop visibly shows (material, color, transparency, inclusions, shape). Keep the visible reference as-is; never reconstruct unseen areas, and never remove a metal cap or fitting to synthesize the crystal surface beneath it.
-- No loose metal accessories.
+- Their final spatial arrangement is free and should be chosen for the most natural hand-arranged jewelry composition: asymmetry, natural spacing, comfortable negative space; no fixed order, no row, no arc template, no equal spacing.
+- Keep the representative beads secondary to the complete bracelet.
+- No extra sample beads. No loose metal accessories.
 
 Style:
-- real jewelry photography, natural reflections, believable translucent crystal material
+- real jewelry photography, natural reflections, believable crystal materials
 - subtle contact shadows, understated composition
 - no infographic feeling, no poster feeling
 
@@ -225,9 +258,18 @@ Text:
 
 NEGATIVE = ("extra bracelet, redesigned bracelet, changed bead type, invented beads, extra loose beads, "
             "missing beads, loose metal accessories, rigid row, grid, mechanical layout, equal spacing, "
-            "template-like placement, text, "
+            "arc template, wrong bead shape, square bead rendered round, opaque bead rendered translucent, "
+            "translucent bead rendered opaque, text, "
             "labels, title, watermark, infographic, poster, collage, sticker cutout, white halo, "
             "floating object, fake transparency, plastic texture, CGI, illustration")
+
+
+def _groups_text(groups):
+    """按参考页左→右顺序（仅索引约定）生成逐组身份描述，供 Prompt 绑定身份。"""
+    return "\n".join(
+        f"- Reference {i}: \u300c{g['label_name']}\u300d — {g['shape']} shape, {g['size_tier']} size tier, "
+        f"{g['color_family']}, {g['material_traits']}."
+        for i, g in enumerate(groups, 1))
 
 
 def _b64url(p: Path) -> str:
@@ -235,51 +277,46 @@ def _b64url(p: Path) -> str:
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
 
 
-def call_edit(clean_src, sheet, template, output_path, n, size="1200*1600"):
-    """一次生成式编辑调用；首选 qwen-image-3.0-pro，失败回退 qwen-image-2.0-pro。"""
+def call_edit(clean_src, sheet, template, output_path, groups, size="1200*1600"):
+    """一次生成式编辑调用；single-pass：不自动重试、不换模型重跑，失败即抛错。"""
     token = _token()
     if not token:
         raise RuntimeError("无可用凭证：请配置 .env 的 DASHSCOPE_API_KEY")
+    model = os.environ.get("QWEN_EDIT_MODEL", "qwen-image-3.0-pro")
     payload = {
+        "model": model,
         "input": {"messages": [{"role": "user", "content": [
             {"image": _b64url(clean_src)},
             {"image": _b64url(sheet)},
             {"image": _b64url(template)},
-            {"text": EDIT_PROMPT.format(n=n)}]}]},
+            {"text": EDIT_PROMPT.format(n=len(groups), groups=_groups_text(groups))}]}]},
         "parameters": {"n": 1, "prompt_extend": False,
                        "size": size, "negative_prompt": NEGATIVE},
     }
-    last_err = ""
-    for model in _models():
-        payload["model"] = model
-        resp = requests.post(_endpoint(),
-                             headers={"Authorization": f"Bearer {token}",
-                                      "Content-Type": "application/json"},
-                             json=payload, timeout=600)
-        if resp.status_code != 200:
-            last_err = f"{model} HTTP {resp.status_code}: {resp.text[:200]}"
-            print(f"[warn] {last_err}")
-            continue
-        data = resp.json()
-        url = None
+    resp = requests.post(_endpoint(),
+                         headers={"Authorization": f"Bearer {token}",
+                                  "Content-Type": "application/json"},
+                         json=payload, timeout=600)
+    if resp.status_code != 200:
+        raise RuntimeError(f"编辑调用失败: {model} HTTP {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
+    url = None
+    try:
+        url = next(c["image"] for c in
+                   data["output"]["choices"][0]["message"]["content"]
+                   if isinstance(c, dict) and c.get("image"))
+    except Exception:
         try:
-            url = next(c["image"] for c in
-                       data["output"]["choices"][0]["message"]["content"]
-                       if isinstance(c, dict) and c.get("image"))
+            url = data["output"]["results"][0]["url"]
         except Exception:
-            try:
-                url = data["output"]["results"][0]["url"]
-            except Exception:
-                url = None
-        if not url:
-            last_err = f"{model} 响应无图片"
-            continue
-        img = requests.get(url, timeout=120)
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_bytes(img.content)
-        print(f"model_used: {model}")
-        return model
-    raise RuntimeError(f"编辑调用失败: {last_err}")
+            url = None
+    if not url:
+        raise RuntimeError(f"编辑调用失败: {model} 响应无图片")
+    img = requests.get(url, timeout=120)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_bytes(img.content)
+    print(f"model_used: {model}")
+    return model
 
 
 # ---------------------------------------------------------------- 编辑式标注
@@ -359,12 +396,12 @@ def main():
         work.mkdir(parents=True, exist_ok=True)
         clean_src = build_clean_source(args.input, analysis["bracelet_bbox_1000"],
                                        work / "clean_source.jpg")
-        sheet = build_bead_sheet(args.input, analysis["crystals"],
+        sheet = build_bead_sheet(args.input, analysis["bead_groups"],
                                  work / "bead_sheet.png")
         print(f"clean_source: {clean_src}\nbead_sheet: {sheet}")
         try:
             call_edit(clean_src, sheet, Path(args.template), args.output,
-                      len(analysis["crystals"]), args.size)
+                      analysis["bead_groups"], args.size)
         except Exception as e:
             print(f"ERROR: {e}")
             return 2

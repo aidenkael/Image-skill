@@ -25,13 +25,18 @@ description: 水晶手镯参考图——清理裁剪 + Agent 识别 + 珠子参�
 
 1. **目视识别**：恰好 N 类水晶珠类，且只统计物理位于手镯环体上的珠子（`type_count` = 手镯上恰好 N 种）；
    金属隔珠/银饰忽略；包装、说明纸、消磁碎石袋、散石及背景中任何类水晶物体不得计为一类、不得污染识别。
+   分组依据（通用视觉结构，非个案补丁）：由「形状 + 相对尺寸档 + 材质/色族 + 内部纹理」的可见组合决定；
+   同色族但形状或尺寸档不同的珠必须分为不同组（如 round vs square/faceted、small round vs large round、
+   translucent vs opaque）。
    代表珠选择：优先手镯上清晰可见、无遮挡、无金属覆盖的该类型珠；裁剪必须来自手镯环体本身，不合成被遮挡/隐藏的水晶面。
-2. **写 `analysis.json`**（0..1000 归一化坐标）：
+2. **写 `analysis.json`**（0..1000 归一化坐标，严格 schema）：
    - `bracelet_bbox_1000` 紧圈手镯环体（排除手、包装盒、纸张）；
-   - `crystals` 恰好 N 项：`{"name": 中文市场名, "bbox_1000": 代表珠矩形}`；
-   - 名称不写"疑似/可能"等措辞（代码会清洗）。
+   - `bead_groups` 恰好 N 项：`{"group_id", "label_name": 中文市场名, "shape": round|square|faceted|barrel|other,
+     "size_tier": small|medium|large, "color_family", "material_traits", "representative_bbox_1000": 代表珠矩形}`；
+   - 代表珠矩形必须落在 `bracelet_bbox_1000` 内（代码强校验，杜绝包装/散石/背景污染）；
+   - 名称不写“疑似/可能”等措辞（代码会清洗）。
 3. **运行**：`python crystal/crystal.py run --input 原图 --types N --analysis analysis.json --output candidate.png`
-   （内部：清理裁剪 → 参考页 → 一次编辑调用；模型首选 qwen-image-3.0-pro，回退 qwen-image-2.0-pro）。
+   （内部：新鲜 analysis 校验 → 清理裁剪 → 新鲜参考页 → 一次编辑调用；single-pass，不自动重试、不换模型重跑）。
 4. **独立目视 QA** 候选图：手镯保真、恰好 N 颗散珠、与参考页一一对应、布局自然（非机械底排）、
    无文字。不可用则如实报告，不自动重跑生成。
 5. **写 `labels.json`**：按生成图中散珠实际摆放就近放名——小字、克制、错落而非居中对齐；
@@ -50,11 +55,17 @@ description: 水晶手镯参考图——清理裁剪 + Agent 识别 + 珠子参�
 
 - 凭证仅经 `.env`/环境变量 `DASHSCOPE_API_KEY`，无其他凭证回退；
 - 端点：`DASHSCOPE_API_URL` 优先；否则 key 以 `sk-sp-` 开头用 Token Plan 端点（见根 `.env.example`），其余用 DashScope 标准端点；
-- 模型：`QWEN_EDIT_MODEL` 可覆盖，默认 `qwen-image-3.0-pro`，回退 `qwen-image-2.0-pro`。
+- 模型：`QWEN_EDIT_MODEL` 可覆盖，默认 `qwen-image-3.0-pro`；single-pass，失败不回退重试（退出码 2，如实报告）。
 
 ## 资产
 
 - `templates/04.jpg` 为当前唯一批准场景模板（`--template` 可换，但先保证单场景正确）。
+
+## single-pass 约束
+
+- 每次调用：一次新鲜 analysis 校验、一张新鲜参考页、一次图像生成调用、一次标注 pass；
+- 无生成重试、无对比重跑循环、不复用上次运行的旧 analysis；
+- 质量不达标由 Agent 如实报告，代码层不自动重跑。
 
 ## 退出码
 
