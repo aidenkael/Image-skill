@@ -4,7 +4,8 @@
 主流水线（规划式多阶段、零重试；取代一次性多参考图合成与顺序插入）：
     新鲜 analysis → base：清理裁剪 + 每组上下文代表资产 + 一次干净场景生成（无散珠）
     → 强制 base QA 门 → Agent 一次性决定全部摆放框 placements.json
-    → compose：N 次独立局部编辑（每次都用同一张干净 base，源组件与目标区域均以 bbox_list 显式选中）
+    → compose：N 次独立局部编辑（每次都用同一张干净 base；Image 1 为无框紧裁剪身份参考，
+      仅 Image 2 目标区域以 bbox_list 选中，visual_identity 绑定进每次插入 prompt）
     → Pillow 羽毛合并仅合并 N 个被编辑的局部区域回同一干净 base
     → Agent 视觉 QA → 本地 Pillow 编辑式标注 → 成品图
 
@@ -250,14 +251,15 @@ def build_representative_assets(
     input_path,
     groups,
     out_dir,
-    context_ratio=0.35,
+    context_ratio=0.12,
     min_side=384,
 ):
-    """每组一个带局部上下文的代表资产：裁剪保留组件周边上下文，
-    但精确源组件由 source_bbox 在调用时以 bbox_list 显式选中。
+    """每组一个紧裁剪单组件身份参考：保留原始源像素（不分割/不去背/不合成），
+    仅最小周边上下文，避免邻珠成为竞争身份源。
 
-    周边裁剪只是上下文，身份选择靠 bbox；短边不足 min_side 时仅放大（不缩小），
-    source_bbox 同步缩放。"""
+    身份选择不再依赖源图 bbox：Wan 交互编辑的 bbox_list 只标识要编辑的区域，
+    源图不加框；身份约束改由 visual_identity 绑定进插入 prompt。短边不足
+    min_side 时仅放大（不缩小）。"""
     im = Image.open(input_path).convert("RGB")
     w, h = im.size
     out_dir = Path(out_dir)
@@ -282,13 +284,6 @@ def build_representative_assets(
 
         crop = im.crop((cx1, cy1, cx2, cy2))
 
-        source_box = [
-            x1 - cx1,
-            y1 - cy1,
-            x2 - cx1,
-            y2 - cy1,
-        ]
-
         scale = max(1.0, min_side / min(crop.width, crop.height))
         if scale > 1.0:
             crop = crop.resize(
@@ -298,14 +293,13 @@ def build_representative_assets(
                 ),
                 Image.LANCZOS,
             )
-            source_box = [round(v * scale) for v in source_box]
 
         path = out_dir / f"reference_{i:02d}.png"
         crop.save(path)
 
         assets.append({
             "path": path,
-            "source_bbox": source_box,
+            "visual_identity": group["visual_identity"],
         })
 
     return assets
@@ -346,33 +340,37 @@ Natural reflections and contact shadows.
 No CGI, plastic, sticker or collage appearance.
 """
 
-INSERT_PROMPT = """Transfer the selected jewelry component from Image 1 into the selected empty target region of Image 2.
+INSERT_PROMPT = """Place the single dominant jewelry component from Image 1 into the selected empty region of Image 2.
 
-The bounding box in Image 1 identifies the exact source component.
-The bounding box in Image 2 identifies the only target area that may be edited.
+Image 1 is the only identity reference for the new component.
+Image 2 is the clean target jewelry photograph.
+Only the selected region of Image 2 may be edited.
 
-Create exactly one physical loose component in the selected target area.
-It must preserve the selected source component:
-- geometry
-- physical proportions
+Required visible identity:
+{visual_identity}
+
+Create exactly one physical loose component in the selected target region.
+
+Preserve from Image 1:
+- geometry and physical proportions
+- relative size implied by the selected target region
 - color
 - transparency or opacity
 - inclusions
-- texture
-- surface traits
+- texture and surface traits
 
-Match the lighting and surface of Image 2.
-Create natural contact shadow and local reflection.
+Do not reinterpret the component as another bead type.
+Do not copy the appearance of any bead already present in Image 2.
 
-Image 2 outside the selected target area must remain unchanged.
-Do not copy or imitate any other object from Image 2.
-Do not add any second object.
+Match Image 2 lighting and surface:
+- natural contact shadow
+- natural local reflection
+- no floating object
+- no cutout/sticker edge
+
 Do not change the bracelet.
+Do not add any second object.
 Do not generate text, labels, logo or watermark.
-
-No floating object.
-No cutout edge.
-No sticker or collage appearance.
 """
 
 
@@ -479,8 +477,9 @@ def generate_representative_edit(
     bbox_1000,
     output_path,
 ):
-    """独立局部编辑：Image 1 = 带上下文的代表资产（source_bbox 选中精确源组件），
-    Image 2 = 未变更的干净 base（target bbox 选中唯一可编辑区域）。
+    """独立局部编辑：Image 1 = 无框紧裁剪身份参考，Image 2 = 未变更干净 base，
+    bbox_list 只框 Image 2 的目标区域（Wan bbox 语义 = 要编辑的区域，源图不加框）；
+    visual_identity 绑定进 prompt 作为显式身份约束。
 
     关键不变量：base_path 必须始终是 base 阶段原始输出；
     任何代表件编辑的产物都不得作为另一次代表件编辑的输入。"""
@@ -489,23 +488,28 @@ def generate_representative_edit(
 
     target_box = bbox1000_to_pixels(bbox_1000, w, h)
 
+    prompt = INSERT_PROMPT.format(
+        visual_identity=representative_asset["visual_identity"]
+    )
+
     return _call_wan(
         [
             representative_asset["path"],
             base_path,
         ],
-        INSERT_PROMPT,
+        prompt,
         output_path,
         size=f"{w}*{h}",
         bbox_list=[
-            [representative_asset["source_bbox"]],
+            [],
             [target_box],
         ],
     )
 
 
-def _expand_pixel_box(box, width, height, ratio=0.45):
-    """合并区域外扩：覆盖模型在目标框周边渲染的接触阴影/反射。"""
+def _expand_pixel_box(box, width, height, ratio=0.20):
+    """合并区域适度外扩：Wan bbox 编辑已限定目标区域，合并只需为羽毛/接触阴影
+    留小边距。横向用 px、纵向用 py（不得混用）。"""
     x1, y1, x2, y2 = box
     bw = x2 - x1
     bh = y2 - y1
@@ -517,7 +521,7 @@ def _expand_pixel_box(box, width, height, ratio=0.45):
         max(0, x1 - px),
         max(0, y1 - py),
         min(width, x2 + px),
-        min(height, y2 + px),
+        min(height, y2 + py),
     ]
 
 

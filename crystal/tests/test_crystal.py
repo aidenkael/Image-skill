@@ -97,29 +97,28 @@ except ValueError:
     pass
 print("[ok] 空/不确定名称显式拒绝；type_count 可选行为保持")
 
-# 5) build_representative_assets()：每组一个资产（path + source_bbox），
-#    source_bbox 有效且落在参考图内，短边满足 min_side
+# 5) build_representative_assets()：每组一个紧裁剪资产（仅 path + visual_identity，
+#    无 source_bbox），默认 context_ratio=0.12，短边满足 min_side
 from PIL import Image  # noqa: E402
-crs = [{"display_name": "A", "visual_identity": "x", "representative_bbox_1000": [100, 100, 200, 200]},
+import inspect  # noqa: E402
+sig = inspect.signature(crystal.build_representative_assets)
+assert sig.parameters["context_ratio"].default == 0.12, "默认 context_ratio 必须为 0.12"
+crs = [{"display_name": "独特标注名ALPHA", "visual_identity": "identity-text-BETA",
+        "representative_bbox_1000": [100, 100, 200, 200]},
        {"display_name": "B", "visual_identity": "x", "representative_bbox_1000": [400, 400, 600, 600]},
        {"display_name": "C", "visual_identity": "x", "representative_bbox_1000": [10, 10, 40, 40]}]
 refs_dir = OUT / "refs"
 assets = crystal.build_representative_assets(SAMPLE, crs, refs_dir, min_side=64)
 assert len(assets) == 3, "每组应生成一个代表资产"
-for i, asset in enumerate(assets, 1):
+for i, (asset, group) in enumerate(zip(assets, crs), 1):
+    assert set(asset) == {"path", "visual_identity"}, \
+        f"asset 只能含 path + visual_identity，实际 {set(asset)}"
+    assert asset["visual_identity"] == group["visual_identity"]
     p = Path(asset["path"])
     assert p.name == f"reference_{i:02d}.png" and p.exists()
     im = Image.open(p)
     assert min(im.size) >= 64, f"{p.name} 短边应放大到至少 64，实际 {im.size}"
-    sb = asset["source_bbox"]
-    x1, y1, x2, y2 = sb
-    assert x1 < x2 and y1 < y2, f"source_bbox 必须有效: {sb}"
-    assert 0 <= x1 and 0 <= y1 and x2 <= im.width and y2 <= im.height, \
-        f"source_bbox 必须落在参考图内: {sb} vs {im.size}"
-# 非边界组的上下文裁剪应比组件框更大（source_bbox 不贴左/上边）
-sb0 = assets[0]["source_bbox"]
-assert sb0[0] > 0 and sb0[1] > 0, "上下文裁剪应包含组件周边，source_bbox 不应贴边"
-print("[ok] build_representative_assets 每组一资产 + source_bbox 有效在图内 + min_side")
+print("[ok] build_representative_assets 紧裁剪资产（无 source_bbox）+ visual_identity 携带 + min_side")
 
 # 6) validate_placements：数量/缺失/重复/反向零面积/排序返回
 pl_good = {"placements": [
@@ -192,7 +191,7 @@ for gone in ("call_edit", "EDIT_PROMPT", "MAX_INPUT_IMAGES", "MAX_BEAD_GROUPS",
              "_groups_text", "negative_prompt", "prompt_extend",
              "qwen-image-2.0-pro", "build_bead_sheet", "bead_sheet",
              "insert_representative", "build_representative_crops",
-             "current = step_out", "[[],", "placed later",
+             "current = step_out", "placed later", "source_bbox",
              "retry", "fallback"):
     assert gone not in src_text, f"旧架构/回退残留: {gone}"
 assert "wan2.7-image-pro" in src_text, "Crystal 默认模型须为 wan2.7-image-pro"
@@ -236,7 +235,7 @@ canvas = Image.new("RGB", (1200, 1600), (235, 232, 226))
 canvas.save(OUT / "t_canvas.png")
 rep_img = Image.new("RGB", (96, 96), (200, 160, 180))
 rep_img.save(OUT / "t_rep.png")
-asset = {"path": OUT / "t_rep.png", "source_bbox": [10, 10, 80, 80]}
+asset = assets[0]  # 独特标注名ALPHA / identity-text-BETA（display_name 不得进 prompt）
 
 calls = []
 
@@ -259,12 +258,13 @@ try:
     assert len(calls) == 1, "一次代表件编辑恰好一次调用"
     c = calls[0]
     assert len(c["images"]) == 2, "独立编辑必须是两图输入"
-    assert c["images"][0] == Path(OUT / "t_rep.png"), "Image 1 必须是代表资产"
+    assert c["images"][0] == Path(asset["path"]), "Image 1 必须是代表资产"
     assert c["images"][1] == Path(OUT / "t_canvas.png"), "Image 2 必须是未变更 base"
-    assert c["bbox_list"] == [[[10, 10, 80, 80]], [[120, 160, 240, 320]]], \
-        f"bbox_list 必须为 [[source_bbox], [target_box]]，实际 {c['bbox_list']}"
+    assert c["bbox_list"] == [[], [[120, 160, 240, 320]]], \
+        f"bbox_list 必须为 [[], [target_box]]（源图不加框），实际 {c['bbox_list']}"
     assert c["size"] == "1200*1600", "编辑尺寸必须跟随 base 画布"
-    assert c["prompt"] == crystal.INSERT_PROMPT
+    assert "identity-text-BETA" in c["prompt"], "插入 prompt 必须绑定 visual_identity"
+    assert "独特标注名ALPHA" not in c["prompt"], "display_name 不得进入插入 prompt"
 
     # generate_base_scene：两图（手镯裁剪 + 模板），无散珠、无 bbox_list
     calls.clear()
@@ -292,7 +292,7 @@ def fake_edit(base_path, representative_asset, bbox_1000, output_path):
     return Path(output_path)
 
 
-assets3 = [{"path": OUT / "t_rep.png", "source_bbox": [10, 10, 80, 80]}] * 3
+assets3 = [{"path": OUT / "t_rep.png", "visual_identity": f"id-{i}"} for i in range(1, 4)]
 placements3 = crystal.validate_placements({"placements": [
     {"reference_index": 1, "bbox_1000": [100, 100, 200, 200]},
     {"reference_index": 2, "bbox_1000": [600, 700, 700, 800]},
@@ -347,6 +347,13 @@ try:
 except ValueError:
     pass
 print("[ok] 确定性局部合并（区域外不变/中心来自编辑图/尺寸守卫）")
+
+# 12.5) _expand_pixel_box：横向用 px、纵向用 py，默认 ratio=0.20（捕捉旧 y2+px bug）
+sig_e = inspect.signature(crystal._expand_pixel_box)
+assert sig_e.parameters["ratio"].default == 0.20, "默认合并外扩比例必须为 0.20"
+exp = crystal._expand_pixel_box([100, 100, 300, 200], 1000, 1000)
+assert exp == [60, 80, 340, 220], f"非方形框横/纵外扩必须分离（px=40/py=20），实际 {exp}"
+print("[ok] _expand_pixel_box 横纵分离 + ratio 0.20")
 
 # 13) _call_wan bbox_list 长度守卫（长度与图片数不一致时不发请求即拒绝）
 try:
