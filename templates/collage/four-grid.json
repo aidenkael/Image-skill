@@ -1,0 +1,17 @@
+{
+  "id": "four-grid",
+  "name": "四宫格",
+  "width": 1080,
+  "height": 1080,
+  "layers": [
+    { "type": "shape", "id": "bg", "x": 0, "y": 0, "width": 1080, "height": 1080, "fill": "#FFFFFF" },
+    { "type": "text", "id": "headline", "tag": "headline", "x": 60, "y": 36, "width": 960, "text": "", "fontSize": 54, "fontWeight": 700, "align": "center", "color": "#111827" },
+    { "type": "image", "id": "slot-0", "x": 60, "y": 128, "width": 460, "height": 460, "fit": "cover", "radius": 16, "slotIndex": 0, "assetId": null },
+    { "type": "image", "id": "slot-1", "x": 560, "y": 128, "width": 460, "height": 460, "fit": "cover", "radius": 16, "slotIndex": 1, "assetId": null },
+    { "type": "image", "id": "slot-2", "x": 60, "y": 628, "width": 460, "height": 460, "fit": "cover", "radius": 16, "slotIndex": 2, "assetId": null },
+    { "type": "image", "id": "slot-3", "x": 560, "y": 628, "width": 460, "height": 460, "fit": "cover", "radius": 16, "slotIndex": 3, "assetId": null },
+    { "type": "text", "id": "sp-1", "tag": "selling-point", "x": 60, "y": 1026, "width": 300, "text": "", "fontSize": 28, "fontWeight": 500, "align": "center", "color": "#374151" },
+    { "type": "text", "id": "sp-2", "tag": "selling-point", "x": 390, "y": 1026, "width": 300, "text": "", "fontSize": 28, "fontWeight": 500, "align": "center", "color": "#374151" },
+    { "type": "text", "id": "sp-3", "tag": "selling-point", "x": 720, "y": 1026, "width": 300, "text": "", "fontSize": 28, "fontWeight": 500, "align": "center", "color": "#374151" }
+  ]
+}

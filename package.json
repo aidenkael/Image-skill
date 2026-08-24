@@ -1,0 +1,33 @@
+{
+  "name": "image-skill",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SHEIN 类 AI 商品视觉工作台 V1：氛围感主图 + 组合卖点图（Next.js + React + TypeScript）",
+  "packageManager": "pnpm@11.23.0",
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "canvas"
+    ]
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fabric": "^7.0.0",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sharp": "^0.35.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.0"
+  }
+}

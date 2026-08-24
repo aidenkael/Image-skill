@@ -1,77 +1,68 @@
-# Image Skill
+# Image-skill V1 — 商品视觉工作台
 
-电商商品图片 AI 生成工作环境。
+SHEIN 类电商商品视觉工作台 V1：在浏览器里完成 **氛围感主图** 与 **组合卖点图** 两条核心链路。
 
-> 输入真实商品图片 → 自动理解商品 → 自动选择场景/人物/风格 → 生成高质量电商图片
+> 输入真实商品图 → 用户决定任务类型 / 素材 / 输出数量 / 文字 / 视觉方向 → 确定性排版 + AI 场景生成 → 直接可用的电商视觉图
 
-## 项目目标
+## V1 范围
 
-为电商商品图片生成建立一套长期工作环境，整合现有 Agent Skill、开源 Prompt、ComfyUI 工作流、国内外图片模型 API 和商业软件方案，实现：
+- ✅ **氛围主图（hero）**：商品图 + 用户方向 → DashScope qwen-image 场景生成（商品保真，仅改变场景/光线/构图/人物交互）
+- ✅ **组合卖点图（collage）**：3 套模板 + 可编辑画布（Fabric.js）→ 确定性排版 → 导出 PNG（**不调用 AI**）
+- 🕐 详情页图（detail）、简单优化（optimize）、批量流水线：**仅保留任务契约与模块边界，V2 阶段实现**
 
-- 完整真人自然使用商品（不只是手部特写）
-- 人物、商品、背景、光影融为一体
-- 商品颜色/结构/图案/Logo 尽量保持一致
-- 根据商品类型自动选择场景，也支持手动指定
-- 去 AI 味，像真实商业摄影
+## 技术栈（固定）
 
-## 三条方案路线
-
-### 方案 A：Agent + Skill + 图片模型 API【当前第一优先】
-
-利用已有开源 Skill 和 Prompt，结合可替换的图片模型 API（Qwen Image / Seedream / Gemini / FLUX），实现端到端电商图片生成。
-
-**详见 → [docs/open-source-research.md](docs/open-source-research.md)**
-
-### 方案 B：ComfyUI + 成熟工作流
-
-收集高质量 ComfyUI 工作流 JSON（商品摄影、真人场景、商品保持、放大修复等），仓库只保存工作流文件和配置说明，不存放模型和缓存。
-
-当前阶段：资料收集与结构预留。
-
-### 方案 C：成熟商业软件
-
-跟踪 Nightjar / Flair / Photoroom / Claid 等商业软件作为效果标杆和备用生产工具。仓库只记录评测结论。
-
-## 项目结构
-
-```
-Image skill/
-├─ skills/          # Agent Skill 文件（复用或适配的开源 Skill）
-│  ├─ ecom-shot/    # 活动 Skill：全品类电商生图薄决策层（25 成熟模板 + 保真 + QA）
-│  └─ product-shots/# motiful/product-shots 只读快照（参考资料，非活动 Skill）
-├─ prompts/         # 结构化 Prompt 模板
-├─ workflows/       # ComfyUI 工作流 JSON
-├─ configs/         # 模型/Provider 配置
-├─ references/      # 参考资料、来源记录
-├─ tests/           # 测试用例
-│  └─ samples/      # 测试商品图片
-├─ docs/            # 文档（研究、方案、决策记录）
-├─ outputs/         # 生成结果（不提交 Git）
-├─ README.md
-├─ AGENTS.md        # Agent 行为约束
-├─ .gitignore
-└─ .env.example     # API Key 模板
-```
+- Next.js + React + TypeScript（单一可部署应用，非 monorepo）
+- `fabric`（Fabric.js v7，浏览器端可编辑画布）
+- `sharp`（服务端确定性图片操作：缩略图/元数据）
+- `zod`（运行时请求/模板校验，唯一事实来源）
+- 本地文件系统存储（`.runtime/`，无数据库）
+- DashScope / 阿里云百炼为 V1 唯一 AI Provider
 
 ## 快速开始
 
-1. 复制 `.env.example` 为 `.env`，填入 API Key
-2. 查看 `docs/open-source-research.md` 了解已筛选的开源项目
-3. 查看 `docs/unified-skill-design.md` 了解统一图片生成流程设计
-4. 测试样例放在 `tests/samples/`
+```bash
+# 1. 安装依赖
+pnpm install
 
-## 核心原则
+# 2. 配置密钥（复制模板后填入）
+cp .env.example .env   # 至少填写 DASHSCOPE_API_KEY
 
-1. 商品必须是画面核心，结构不能随意改变
-2. 真人必须完整、动作自然，与商品真实接触
-3. 光线/阴影/比例合理，场景符合商品实际使用方式
-4. 避免塑料皮肤、假背景、悬浮商品
-5. 追求"像真实商业摄影"而非"像 AI 生成图片"
-6. 不默认白底图，根据商品类型选择不同视觉方向
+# 3. 启动开发服务器
+pnpm dev              # http://localhost:3000
 
-## 执行原则
+# 4. 验证
+pnpm test --run       # 定向测试：任务校验 + 模板文档校验
+pnpm build            # 类型检查 + 生产构建
+```
 
-> 先找现成工具 → 再找 Skill → 再找 Workflow → 再借鉴开源代码 → 最后才自行开发
+## 使用流程
+
+1. **上传商品图**（左侧面板，支持拖拽，JPEG/PNG/WebP，≤20MB）
+2. **切换任务**（顶部：氛围主图 / 组合卖点图 / 详情页图 / 简单优化）
+3. **氛围主图**：选择源图 → 输出数量 / 比例 / 人物 / 场景 → 生成（未配置 Key 时会明确报错）
+4. **组合卖点图**：选择模板与素材 → 创建布局 → 画布内拖动/缩放/双击编辑文字/替换图片 → 导出 PNG
+5. 生成结果与会话内已上传资源在当前会话保持可见
+
+## 项目结构
+
+```text
+src/
+  app/          # 页面 + API 路由（薄适配层）
+  core/         # 纯 TS 契约：assets / tasks / results / templates
+  features/     # UI 功能模块：workbench / assets / hero / collage / detail
+  editor/       # 浏览器端 Fabric 适配：document / canvas / render / export
+  server/       # 服务端：assets / tasks / image(sharp) / providers / storage(fs)
+templates/
+  collage/      # 3 套拼图模板 JSON（left-hero-right-three / top-hero-bottom-three / four-grid）
+  detail/       # V2 阶段保留
+.runtime/       # 运行期文件（不入 Git）
+```
+
+## 文档
+
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — 开发指南（产品定义 / 模块边界 / 契约 / 开发顺序）
+- `legacy/` — 旧 Agent+Skill 试验资料（历史参考，非运行时）
 
 ## License
 

@@ -1,0 +1,97 @@
+# DEVELOPMENT — Image-skill V1 开发指南
+
+> 仅收录耐久性开发指导；旧 Agent+Skill 资料见 `legacy/`（非运行时）。
+
+## 1. 产品定义
+
+SHEIN 类电商商品视觉工作台：卖家上传真实商品图，选择任务类型与视觉方向，
+产出可直接投放的氛围主图与组合卖点图。**用户拥有最终决定权**（任务类型、输入素材、
+输出数量、是否含文字、视觉方向）。
+
+运行时 = 常规 Web 软件 + AI Provider；Agent 只是开发工具，不是产品运行时。
+
+## 2. V1 范围
+
+| 能力 | 状态 |
+|------|------|
+| 氛围主图 hero（AI 场景生成，商品保真） | ✅ V1 完整实现 |
+| 组合卖点图 collage（确定性排版 + 可编辑画布 + PNG 导出） | ✅ V1 完整实现 |
+| 详情页 detail | 🕐 仅任务契约 + 模块边界 |
+| 简单优化 optimize | 🕐 仅任务契约 |
+| 批量流水线 / 队列 / SKU 导入 | 🕐 不实现，保留可复用契约 |
+
+评价标准：最终图片质量 / 商品真实性 / 真人自然度 / 去 AI 味 / 卖家使用效率 / 延迟与成本。
+
+## 3. 人机交互
+
+- 单页工作台：左=资源面板，中=预览/编辑画布，右=当前任务控制，顶=任务切换。
+- 任务切换保留各自状态；detail / optimize 必须保持"后续阶段"可见状态，不得静默调用 hero。
+- UI 不暴露 prompt、模型 id、Provider 内部或 Agent 概念。
+- 上传支持拖拽；资源角色可修正；生成结果会话内保持可见。
+
+## 4. 模块边界（强制）
+
+| 目录 | 职责 | 禁止 |
+|------|------|------|
+| `src/core/**` | 纯 TS 契约/规则（zod 唯一事实来源） | 不得 import React/Next/Node fs/Fabric/Provider SDK |
+| `src/features/**` | UI 功能模块 | 不得 import `src/server` |
+| `src/editor/**` | 浏览器端 Fabric 适配 | 不得含 AI/Provider/业务编排 |
+| `src/server/**` | 服务端函数 | 不得 import React/UI 功能模块 |
+| `src/app/api/**` | 薄 HTTP 适配层 | 只做校验+服务调用+响应 |
+| `src/server/providers/**` | Provider 请求/响应解析 | 只允许出现在本目录 |
+| `templates/**` | 模板 JSON（数据，非 React 代码） | — |
+
+## 5. 固定代码结构
+
+非 monorepo，单一可部署应用：
+
+```text
+src/
+  app/  page.tsx, api/assets(/, [id]), api/tasks(/, [id], [id]/outputs/[...path])
+  features/  workbench, assets, hero, collage, detail
+  components/  ui/（预留）
+  core/  assets.ts, tasks.ts, results.ts, templates.ts
+  editor/  fabric/ (canvas.ts, document.ts, render.ts, export.ts)
+  server/  assets/service.ts, tasks/(service.ts, hero.ts, collage.ts),
+            image/sharp.ts, providers/(image-provider.ts, aliyun-qwen-image.ts), storage/fs-store.ts
+templates/
+  collage/  left-hero-right-three.json, top-hero-bottom-three.json, four-grid.json
+  detail/   （V2 保留）
+.runtime/  assets/ outputs/ tasks/（不入 Git）
+```
+
+## 6. 开源借用决策
+
+| 项目 | 借用 | 不做什么 |
+|------|------|----------|
+| Fabric.js（`fabric` v7，官方包；指令指定 `@fabricjs/browser` 在 registry 不存在，用同一库官方包替代） | 浏览器画布/对象/JSON 能力 | 不自写画布原语、不做通用设计器 |
+| InvokeAI | 面向功能的 UI 分层与服务边界思路 | 不 fork 其 UI |
+| Sharp | 服务端确定性图片操作（缩略图/元数据/后续裁剪） | 不自研图像算法 |
+| ComfyUI | 仅预留未来外部工作流 Provider 边界（`ImageProvider`） | V1 无依赖 |
+| rembg | 预留可选未来背景移除适配器 | V1 不加 Python/运行时依赖 |
+| Qwen-Image | 仅 API/Provider 集成 | 不 vendor 模型代码 |
+
+## 7. 任务 / API 契约
+
+- `CreateTaskRequest { kind, assetIds[], count, options }`：所有单件操作都走该契约
+  （未来批量调用方直接复用）。`count` 按类型校验：hero 1..4，collage 1..3 且 ≤ 模板数。
+- `TaskRecord { id, request, status, result?, error?, createdAt, updatedAt }`，落盘 `.runtime/tasks/`。
+- API：`POST/GET /api/assets`、`GET/PATCH /api/assets/:id`、
+  `POST/GET /api/tasks`、`GET /api/tasks/:id`、`GET /api/tasks/:id/outputs/[...path]`。
+- hero 结果下载到 `.runtime/outputs/<taskId>/`，通过客户端安全 URL 提供；
+  不向客户端暴露本地绝对路径，不存 base64 图片体。
+- Provider 契约：`ImageProvider.generate({ imagePath, prompt, size, count })`。
+- 未配置 `DASHSCOPE_API_KEY` 时返回明确配置错误，不伪造成功结果。
+
+## 8. V1 开发顺序
+
+1. core 契约（assets/tasks/results/templates）→ 2. server（存储/资源/任务/Provider）→
+3. API 路由 → 4. 模板 JSON → 5. editor（Fabric 适配）→ 6. features UI → 7. 定向测试 → 8. 构建验证。
+
+## 9. 必要验证
+
+- `pnpm test --run`：仅任务校验 + 模板文档校验两组定向测试。
+- `pnpm build`：类型检查 + 生产构建。
+- 手工冒烟：上传 4 张图 → 构建 left-hero-right-three → 改标题 → 导出 PNG →
+  hero 无 Key 时明确报错。
+- 自动化验证不消耗付费 AI 生成额度。

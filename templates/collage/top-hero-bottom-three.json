@@ -1,0 +1,14 @@
+{
+  "id": "top-hero-bottom-three",
+  "name": "上主图 + 下三图",
+  "width": 1080,
+  "height": 1350,
+  "layers": [
+    { "type": "shape", "id": "bg", "x": 0, "y": 0, "width": 1080, "height": 1350, "fill": "#F4F6F8" },
+    { "type": "image", "id": "slot-hero", "x": 40, "y": 40, "width": 1000, "height": 700, "fit": "cover", "radius": 16, "slotIndex": 0, "assetId": null },
+    { "type": "text", "id": "headline", "tag": "headline", "x": 40, "y": 768, "width": 1000, "text": "", "fontSize": 52, "fontWeight": 700, "align": "center", "color": "#111827" },
+    { "type": "image", "id": "slot-1", "x": 40, "y": 900, "width": 310, "height": 410, "fit": "cover", "radius": 12, "slotIndex": 1, "assetId": null },
+    { "type": "image", "id": "slot-2", "x": 385, "y": 900, "width": 310, "height": 410, "fit": "cover", "radius": 12, "slotIndex": 2, "assetId": null },
+    { "type": "image", "id": "slot-3", "x": 730, "y": 900, "width": 310, "height": 410, "fit": "cover", "radius": 12, "slotIndex": 3, "assetId": null }
+  ]
+}

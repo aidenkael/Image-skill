@@ -1,0 +1,17 @@
+{
+  "id": "left-hero-right-three",
+  "name": "左主图 + 右三图",
+  "width": 1080,
+  "height": 1350,
+  "layers": [
+    { "type": "shape", "id": "bg", "x": 0, "y": 0, "width": 1080, "height": 1350, "fill": "#F7F5F2" },
+    { "type": "image", "id": "slot-hero", "x": 0, "y": 0, "width": 648, "height": 1350, "fit": "cover", "radius": 0, "slotIndex": 0, "assetId": null },
+    { "type": "text", "id": "headline", "tag": "headline", "x": 692, "y": 56, "width": 352, "text": "", "fontSize": 46, "fontWeight": 700, "align": "left", "color": "#1F2937" },
+    { "type": "image", "id": "slot-1", "x": 692, "y": 158, "width": 352, "height": 338, "fit": "cover", "radius": 12, "slotIndex": 1, "assetId": null },
+    { "type": "image", "id": "slot-2", "x": 692, "y": 516, "width": 352, "height": 338, "fit": "cover", "radius": 12, "slotIndex": 2, "assetId": null },
+    { "type": "image", "id": "slot-3", "x": 692, "y": 874, "width": 352, "height": 338, "fit": "cover", "radius": 12, "slotIndex": 3, "assetId": null },
+    { "type": "text", "id": "sp-1", "tag": "selling-point", "x": 692, "y": 1244, "width": 110, "text": "", "fontSize": 24, "fontWeight": 500, "align": "center", "color": "#374151" },
+    { "type": "text", "id": "sp-2", "tag": "selling-point", "x": 810, "y": 1244, "width": 110, "text": "", "fontSize": 24, "fontWeight": 500, "align": "center", "color": "#374151" },
+    { "type": "text", "id": "sp-3", "tag": "selling-point", "x": 928, "y": 1244, "width": 110, "text": "", "fontSize": 24, "fontWeight": 500, "align": "center", "color": "#374151" }
+  ]
+}

@@ -3,6 +3,11 @@
 *.key
 *.pem
 
+# === V1 运行时 ===
+.runtime/
+.next/
+*.tsbuildinfo
+
 # === Outputs & Generated Images ===
 # 仅限仓库根 outputs/（不伤及嵌套目录，如 crystal/tests/outputs/）
 /outputs/
