@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """crystal 技能 — 水晶手镯参考图（生成式编辑主流水线，唯一运行时入口）。
 
-主流水线（取代旧 rembg 本地合成）：
-    源图清理裁剪 → Agent 识别 N 类 + 代表珠裁剪 → 珠子参考页
-    → 一次 qwen 图像编辑调用（清理源图 + 参考页 + 固定场景模板）
-    → 本地 Pillow 编辑式标注 → 成品图
+主流水线（取代旧 rembg 本地合成与 contact sheet 瓶颈）：
+    源图清理裁剪 → Agent 识别 N 组 + 每组一个独立代表件裁剪
+    → 一次 wan2.7-image-pro 多参考图编辑调用（Image1 完整手镯 + N 张独立代表参考 + 场景模板）
+    → Agent 视觉 QA → 本地 Pillow 编辑式标注 → 成品图
 
 凭证仅从环境变量 DASHSCOPE_API_KEY（.env）读取，代码不硬编码密钥，无其他凭证回退；
-模型/端点可用环境变量替换（QWEN_EDIT_MODEL / DASHSCOPE_API_URL）。
+Crystal 图像模型用 CRYSTAL_IMAGE_MODEL（默认 wan2.7-image-pro），端点可用 DASHSCOPE_API_URL 替换。
 
 用法:
     python crystal/crystal.py run \
@@ -93,13 +93,18 @@ DASHSCOPE_ENDPOINT = ("https://dashscope.aliyuncs.com/api/v1/services/aigc/"
 
 
 def _endpoint():
-    """DASHSCOPE_API_URL 优先；否则 sk-sp- 用 Token Plan 端点，其余用标准端点。"""
+    """DASHSCOPE_API_URL 优先；否则仅 sk-sp- Token Plan 凭证走 Token Plan 端点。
+    非 Token Plan 凭证且未显式配置 DASHSCOPE_API_URL 时直接失败，
+    拒绝猜测 Wan workspace 端点。"""
     url = os.environ.get("DASHSCOPE_API_URL")
     if url:
         return url
     if (_token() or "").startswith("sk-sp-"):
         return TOKEN_PLAN_ENDPOINT
-    return DASHSCOPE_ENDPOINT
+    raise RuntimeError(
+        "非 Token Plan（sk-sp-）凭证且未配置 DASHSCOPE_API_URL："
+        "拒绝猜测 Wan workspace 端点，请改用 Token Plan 凭证或显式配置 DASHSCOPE_API_URL"
+    )
 
 
 # ---------------------------------------------------------------- 分析校验
@@ -115,24 +120,28 @@ def clean_name(name):
 
 
 def bbox1000_to_pixels(bbox, width, height):
-    if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
-        raise ValueError(f"bbox_1000 非法: {bbox}")
-    x1, y1, x2, y2 = (float(v) for v in bbox)
-    if not all(0.0 <= v <= 1000.0 for v in (x1, y1, x2, y2)):
-        raise ValueError(f"bbox_1000 超出 0-1000: {bbox}")
-    px = [int(round(x1 / 1000 * width)), int(round(y1 / 1000 * height)),
-          int(round(x2 / 1000 * width)), int(round(y2 / 1000 * height))]
+    x1, y1, x2, y2 = _check_bbox(bbox, "bbox_1000")
+    px = [
+        int(round(x1 / 1000 * width)),
+        int(round(y1 / 1000 * height)),
+        int(round(x2 / 1000 * width)),
+        int(round(y2 / 1000 * height)),
+    ]
     px[2] = min(width, max(px[0] + 1, px[2]))
     px[3] = min(height, max(px[1] + 1, px[3]))
     return px
 
 
 def _check_bbox(bbox, label):
-    if not all(0.0 <= v <= 1000.0 for v in bbox):
+    if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+        raise ValueError(f"{label} 非法: {bbox}")
+    vals = [float(v) for v in bbox]
+    if not all(0.0 <= v <= 1000.0 for v in vals):
         raise ValueError(f"{label} 超出 0-1000: {bbox}")
-    x1, y1, x2, y2 = bbox
+    x1, y1, x2, y2 = vals
     if not (x1 < x2 and y1 < y2):
-        raise ValueError(f"{label} 必须满足 x1<x2 且 y1<y2（拒绝反向/零面积矩形）: {bbox}")
+        raise ValueError(f"{label} 必须满足 x1<x2 且 y1<y2: {bbox}")
+    return vals
 
 
 def validate_analysis(raw, type_count=None):
@@ -148,11 +157,7 @@ def validate_analysis(raw, type_count=None):
     if type_count is not None and len(groups) != type_count:
         raise ValueError(f"珠类组数不符: analysis 提供 {len(groups)} 组，"
                          f"显式要求恰好 {type_count} 组")
-    bb = raw.get("bracelet_bbox_1000")
-    if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
-        raise ValueError(f"bracelet_bbox_1000 非法: {bb}")
-    bb = [float(v) for v in bb]
-    _check_bbox(bb, "bracelet_bbox_1000")
+    bb = _check_bbox(raw.get("bracelet_bbox_1000"), "bracelet_bbox_1000")
     cleaned = []
     for i, g in enumerate(groups):
         if not isinstance(g, dict):
@@ -161,11 +166,8 @@ def validate_analysis(raw, type_count=None):
         if not vi:
             raise ValueError(f"bead_groups[{i}].visual_identity 缺失"
                              f"（须为自由文本的可见身份描述）")
-        rb = g.get("representative_bbox_1000")
-        if not (isinstance(rb, (list, tuple)) and len(rb) == 4):
-            raise ValueError(f"bead_groups[{i}].representative_bbox_1000 非法: {rb}")
-        rb = [float(v) for v in rb]
-        _check_bbox(rb, f"bead_groups[{i}].representative_bbox_1000")
+        rb = _check_bbox(g.get("representative_bbox_1000"),
+                         f"bead_groups[{i}].representative_bbox_1000")
         if not (rb[0] >= bb[0] - 1 and rb[1] >= bb[1] - 1 and
                 rb[2] <= bb[2] + 1 and rb[3] <= bb[3] + 1):
             raise ValueError(f"bead_groups[{i}] 代表矩形坐标 sanity check 失败："
@@ -178,99 +180,122 @@ def validate_analysis(raw, type_count=None):
 
 # ---------------------------------------------------------------- 本地准备
 
-def build_clean_source(input_path, bbox_1000, out_path, margin=0.06):
-    """清理裁剪：完整可见手镯产品范围（含金属配件），排除包装/托盘/手/说明纸等无关内容。"""
+def build_clean_source(input_path, bbox_1000, out_path, margin=0.06, min_side=384):
+    """清理裁剪：完整可见手镯产品范围（含金属配件），排除包装/托盘/手/说明纸等无关内容。
+
+    短边不足 min_side 时仅放大（不缩小），满足 wan2.7-image-pro 输入最低分辨率（≥240x240）。"""
     im = Image.open(input_path).convert("RGB")
     w, h = im.size
     x1, y1, x2, y2 = bbox1000_to_pixels(bbox_1000, w, h)
     mx, my = int((x2 - x1) * margin), int((y2 - y1) * margin)
     box = (max(0, x1 - mx), max(0, y1 - my), min(w, x2 + mx), min(h, y2 + my))
-    im.crop(box).save(out_path, quality=92)
+    crop = im.crop(box)
+    scale = max(1.0, min_side / min(crop.width, crop.height))
+    if scale > 1.0:
+        crop = crop.resize((max(1, round(crop.width * scale)),
+                            max(1, round(crop.height * scale))), Image.LANCZOS)
+    crop.save(out_path, quality=92)
     return Path(out_path)
 
 
-def build_bead_sheet(input_path, groups, out_path, gap=40, max_width=1600, max_height=520):
-    """代表珠参考页：同一源图的矩形原始裁剪，左→右按识别顺序。
+def build_representative_crops(input_path, groups, out_dir, min_side=384):
+    """独立代表件参考图：每组一个独立裁剪文件（不再拼 contact sheet）。
 
-    所有裁剪共用一个缩放因子（仅当整页超限才等比缩小），
-    间隙为固定中性 padding、不参与缩放；
-    保留源图中代表珠的相对表观尺寸，不暗示不同珠类物理尺寸相同。"""
+    这些裁剪仅作为可见身份参考；物理尺度由 Image 1 + visual_identity 决定，
+    不由独立参考图的像素尺寸决定。短边不足 min_side 时仅放大（不缩小）。"""
     im = Image.open(input_path).convert("RGB")
     w, h = im.size
-    crops = [im.crop(bbox1000_to_pixels(g["representative_bbox_1000"], w, h))
-             for g in groups]
-    n = len(crops)
-    crop_w = sum(c.width for c in crops)
-    avail_w = max_width - gap * (n - 1)
-    if avail_w <= 0:
-        raise ValueError(f"参考页配置非法：固定间隙已占满 max_width"
-                         f"（available_width={avail_w}），请增大 max_width 或减小 gap")
-    max_h = max(c.height for c in crops)
-    scale = min(1.0, avail_w / crop_w, max_height / max_h)
-    scaled = []
-    for c in crops:
-        if scale < 1.0:
-            c = c.resize((max(1, int(c.width * scale)),
-                          max(1, int(c.height * scale))),
-                         Image.LANCZOS)
-        scaled.append(c)
-    sheet_h = max(r.height for r in scaled)
-    sheet = Image.new("RGB", (sum(r.width for r in scaled) + gap * (len(scaled) - 1),
-                              sheet_h), (245, 245, 245))
-    x = 0
-    for r in scaled:
-        sheet.paste(r, (x, (sheet_h - r.height) // 2))
-        x += r.width + gap
-    sheet.save(out_path)
-    return Path(out_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    paths = []
+    for i, group in enumerate(groups, 1):
+        crop = im.crop(
+            bbox1000_to_pixels(
+                group["representative_bbox_1000"], w, h
+            )
+        )
+
+        scale = max(1.0, min_side / min(crop.width, crop.height))
+        if scale > 1.0:
+            crop = crop.resize(
+                (
+                    max(1, round(crop.width * scale)),
+                    max(1, round(crop.height * scale)),
+                ),
+                Image.LANCZOS,
+            )
+
+        path = out_dir / f"reference_{i:02d}.png"
+        crop.save(path)
+        paths.append(path)
+
+    return paths
 
 
 # ---------------------------------------------------------------- 编辑调用
 
-EDIT_PROMPT = """Create a photorealistic jewelry reference photo, as if carefully arranged and shot by a jeweler.
+MAX_INPUT_IMAGES = 9
+MAX_BEAD_GROUPS = MAX_INPUT_IMAGES - 2
+
+
+def _image_model():
+    """Crystal 专用图像编辑模型：CRYSTAL_IMAGE_MODEL 可覆盖，默认 wan2.7-image-pro。
+    Crystal 不使用 ecom-shot 的编辑模型配置变量。"""
+    return os.environ.get("CRYSTAL_IMAGE_MODEL", "wan2.7-image-pro")
+
+
+EDIT_PROMPT = """Create a photorealistic jewelry reference photo.
 
 Reference roles:
-- Image 1 is the only source of truth for the bracelet.
-- Image 2 is the representative bead reference sheet; its left-to-right order is only an identity/indexing convention.
-- Image 3 is only the empty scene/background reference.
+- Image 1 is the only source of truth for the complete bracelet.
+- Images 2 through {n_plus_one} are independent representative component references, exactly one image per bead_group.
+- Image {scene_index} is only the empty scene/background reference.
 
-Bracelet (main subject):
-- One complete bracelet as the clear main subject.
-- Preserve bracelet structure, bead order, each bead's visible identity (geometry, relative apparent size, color, transparency, inclusions, surface traits) and metal accessories from Image 1.
-- Do not redesign the bracelet; do not add, remove, merge or substitute any bead or metal part.
+Bracelet:
+- Recreate one complete bracelet from Image 1.
+- Preserve all visible beads, stones, pearls, metal settings, spacers, connectors and ornaments.
+- Preserve order, geometry, relative physical scale, color, transparency, inclusions and surface traits.
+- Do not add, remove, merge, substitute or redesign bracelet components.
 
-Representative beads (secondary):
-- Exactly {n} loose beads in the whole image: never more, never fewer.
-- One loose bead per group below; the list order matches the references in Image 2 (indexing convention only).
+Loose representatives:
+- Create exactly {n} loose representatives in the final image.
+- Create exactly one from each independent representative reference image.
 {groups}
-- Each loose bead must visibly match its group's visual_identity description: same geometry, same relative apparent size, same color and transparency/opacity, same inclusions and surface traits. Never normalize different groups toward a common shape or size.
-- Each representative must look like the actual bracelet component was physically removed from the bracelet and placed beside it. Preserve its physical scale and dimensions relative to the bracelet, and preserve the relative size relationships between different groups. Allow only normal perspective variation. Never intentionally enlarge or shrink a representative.
-- Their final spatial arrangement is free and should be chosen for the most natural hand-arranged jewelry composition: asymmetry, natural spacing, comfortable negative space; no fixed order, no row, no arc template, no equal spacing.
-- Keep the representative beads secondary to the complete bracelet.
-- No extra sample beads. No loose metal accessories.
+- Every representative must preserve the visible identity of its own reference.
+- Preserve its physical scale relative to the bracelet and the relative size relationships between groups.
+- Do not normalize different groups toward a common shape, size, color or transparency.
+- No duplicate, omitted, merged or substituted representative.
+- No extra loose metal accessories.
+
+Composition:
+- Complete bracelet is the clear main subject.
+- Loose representatives are secondary and look naturally hand-arranged beside it.
+- Use asymmetry, natural spacing and comfortable negative space.
+- No row, grid, equal spacing, fixed arc or reference-order layout.
 
 Style:
-- real jewelry photography, natural reflections, believable crystal materials
-- subtle contact shadows, understated composition
-- no infographic feeling, no poster feeling
+- photorealistic commercial/editorial jewelry photography
+- believable crystal/glass/pearl material
+- natural reflections and contact shadows
+- no CGI/plastic/sticker/collage look
 
 Text:
-- generate no text, no labels, no title, no watermark, no logo"""
+- generate no text, labels, title, logo or watermark"""
 
-NEGATIVE = ("extra bracelet, redesigned bracelet, changed bead type, invented beads, extra loose beads, "
-            "missing beads, loose metal accessories, rigid row, grid, mechanical layout, equal spacing, "
-            "arc template, changed bead geometry, changed relative bead size, changed transparency or opacity, "
-            "text, "
-            "labels, title, watermark, infographic, poster, collage, sticker cutout, white halo, "
-            "floating object, fake transparency, plastic texture, CGI, illustration")
+NEGATIVE = ("extra representative, missing representative, duplicate representative, merged representative, "
+            "changed bracelet structure, changed bead geometry, changed bead scale, changed transparency, "
+            "loose metal accessory, rigid row, grid, equal spacing, fixed arc, "
+            "text, labels, title, watermark, CGI, plastic, sticker, collage")
 
 
 def _groups_text(groups):
-    """按参考页索引（仅身份/索引约定）绑定可见身份：只含 visual_identity，
+    """每个组直接对应一张独立参考图（Image 2..N+1）：只含 visual_identity，
     display_name 绝不进入生成 Prompt（猜测的矿名不得干扰生成）。"""
     return "\n".join(
-        f"- Reference {i}: {g['visual_identity']}."
-        for i, g in enumerate(groups, 1))
+        f"- Reference image {i + 2}: {g['visual_identity']}."
+        for i, g in enumerate(groups)
+    )
 
 
 def _b64url(p: Path) -> str:
@@ -278,21 +303,36 @@ def _b64url(p: Path) -> str:
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
 
 
-def call_edit(clean_src, sheet, template, output_path, groups, size="1200*1600"):
-    """一次生成式编辑调用；single-pass：不自动重试、不换模型重跑，失败即抛错。"""
+def call_edit(clean_src, representative_paths, template, output_path, groups,
+              size="1200*1600"):
+    """一次 wan2.7-image-pro 多参考图编辑调用；single-pass：不自动重试、不换模型重跑。
+
+    输入图顺序：Image1 完整手镯裁剪 → N 张独立代表件参考图 → 最后为场景模板。
+    失败即抛错，无 qwen 回退、无 contact-sheet 回退。"""
+    if len(groups) > MAX_BEAD_GROUPS:
+        raise ValueError(
+            f"当前直接多参考图路径最多支持 {MAX_BEAD_GROUPS} 个 bead_groups，"
+            f"当前为 {len(groups)}；拒绝退化为 contact sheet"
+        )
     token = _token()
     if not token:
         raise RuntimeError("无可用凭证：请配置 .env 的 DASHSCOPE_API_KEY")
-    model = os.environ.get("QWEN_EDIT_MODEL", "qwen-image-3.0-pro")
+    model = _image_model()
+    content = [{"image": _b64url(clean_src)}]
+    content.extend({"image": _b64url(p)} for p in representative_paths)
+    content.append({"image": _b64url(template)})
+    content.append({
+        "text": EDIT_PROMPT.format(
+            n=len(groups),
+            n_plus_one=len(groups) + 1,
+            scene_index=len(groups) + 2,
+            groups=_groups_text(groups),
+        )
+    })
     payload = {
         "model": model,
-        "input": {"messages": [{"role": "user", "content": [
-            {"image": _b64url(clean_src)},
-            {"image": _b64url(sheet)},
-            {"image": _b64url(template)},
-            {"text": EDIT_PROMPT.format(n=len(groups), groups=_groups_text(groups))}]}]},
-        "parameters": {"n": 1, "prompt_extend": False,
-                       "size": size, "negative_prompt": NEGATIVE},
+        "input": {"messages": [{"role": "user", "content": content}]},
+        "parameters": {"n": 1, "size": size, "negative_prompt": NEGATIVE},
     }
     resp = requests.post(_endpoint(),
                          headers={"Authorization": f"Bearer {token}",
@@ -373,10 +413,10 @@ def render_labels(input_path, labels, output_path, font_size=34):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="水晶手镯参考图：清理裁剪 + 参考页 + 一次生成式编辑 + 本地编辑式标注")
+        description="水晶手镯参考图：清理裁剪 + 独立多参考图 + 一次 wan2.7-image-pro 编辑 + 本地编辑式标注")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_run = sub.add_parser("run", help="清理裁剪 → 参考页 → 一次编辑调用 → 候选图")
+    p_run = sub.add_parser("run", help="清理裁剪 → 独立代表参考图 → 一次编辑调用 → 候选图")
     p_run.add_argument("--input", required=True)
     p_run.add_argument("--types", type=int, default=None,
                        help="可选：显式组数；缺省用当前 analysis 的新鲜组数")
@@ -406,12 +446,13 @@ def main():
         work.mkdir(parents=True, exist_ok=True)
         clean_src = build_clean_source(args.input, analysis["bracelet_bbox_1000"],
                                        work / "clean_source.jpg")
-        sheet = build_bead_sheet(args.input, analysis["bead_groups"],
-                                 work / "bead_sheet.png")
-        print(f"clean_source: {clean_src}\nbead_sheet: {sheet}")
+        representative_paths = build_representative_crops(
+            args.input, analysis["bead_groups"], work / "references")
+        print(f"clean_source: {clean_src}\n"
+              f"representative crops: {[str(p) for p in representative_paths]}")
         try:
-            call_edit(clean_src, sheet, Path(args.template), args.output,
-                      analysis["bead_groups"], args.size)
+            call_edit(clean_src, representative_paths, Path(args.template),
+                      args.output, analysis["bead_groups"], args.size)
         except Exception as e:
             print(f"ERROR: {e}")
             return 2

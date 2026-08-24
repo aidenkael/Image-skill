@@ -2,17 +2,19 @@
 
 输入一张手镯实拍图 + 种类数 N，输出一张"人工摆拍 + 手工标注"感的珠宝参考照片：
 完整手镯为主体，N 组视觉可区分的非金属珠/石/珍珠组件（bead_groups）各取一个代表件，
-像被物理取下摆在手镯旁（保留相对物理尺度与组间相对尺寸关系，不放大不缩小），小字楷体中文注记（可带细引线）。
+每组一张独立参考图直传模型（保留相对物理尺度与组间相对尺寸关系，不放大不缩小），小字楷体中文注记（可带细引线）。
 
-## 主流水线（生成式编辑）
+## 主流水线（wan2.7-image-pro 多参考图）
 
 ```
-源图清理裁剪 → Agent 识别 N 组 + 代表珠 → 珠子参考页
-→ 一次 qwen 图像编辑调用（清理源图 + 参考页 + templates/04.jpg）
-→ 本地 Pillow 编辑式标注 → 成品图
+源图清理裁剪 → Agent 识别 N 组 → 每组独立代表参考图
+→ 一次 wan2.7-image-pro 编辑调用（Image1 完整手镯 + Images 2..N+1 独立参考 + 最后模板 04）
+→ Agent 视觉 QA → 本地 Pillow 编辑式标注 → 成品图
 ```
 
-旧 rembg 本地抠图合成已移除（贴纸感/机械底排/膜状暗边，方向错误）。
+旧 rembg 本地抠图合成已移除（贴纸感/机械底排/膜状暗边，方向错误）；
+旧 qwen-image-3.0-pro contact sheet 路径已移除（3 张输入图上限迫使多身份压缩进一张参考页，
+逐组一对一保真失败；wan2.7-image-pro 支持最多 9 张输入图，改为每组独立参考图直传）。
 
 ## 安装
 
@@ -21,8 +23,10 @@ pip install -r crystal/requirements.txt
 ```
 
 凭证经 `.env`/环境变量（不硬编码）：仅 `DASHSCOPE_API_KEY`，无其他回退；
-端点解析：`DASHSCOPE_API_URL` 优先，`sk-sp-` key 走 Token Plan 端点（见根 `.env.example`），否则 DashScope 标准端点；
-可选 `QWEN_EDIT_MODEL`（默认 qwen-image-3.0-pro；single-pass，失败不回退重试）。
+端点解析：`DASHSCOPE_API_URL` 优先，`sk-sp-` key 走 Token Plan 端点（见根 `.env.example`），
+非 Token Plan 凭证且未配置 `DASHSCOPE_API_URL` 时直接失败（不猜测 Wan workspace 端点）；
+Crystal 图像模型：`CRYSTAL_IMAGE_MODEL`（默认 `wan2.7-image-pro`；single-pass，失败不回退重试；
+不使用 `QWEN_EDIT_MODEL`，那是 ecom-shot 的配置）。
 
 ## 用法
 
@@ -35,6 +39,7 @@ pip install -r crystal/requirements.txt
 #    每组 {"display_name": 中文标注名, "visual_identity": 可见外观自由文本, "representative_bbox_1000": 代表矩形}，无 group_id；
 #    display_name 只用于标注，绝不进入生成 Prompt
 #    --types 可选：提供则强校验组数；缺省用当前分析的新鲜组数
+#    直接多参考图路径最多支持 7 个 bead_groups（9 张输入图上限 - 手镯 - 模板）
 python crystal/crystal.py run --input src.jpg [--types N] \
     --analysis analysis.json --output candidate.png
 
