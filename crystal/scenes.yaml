@@ -1,0 +1,116 @@
+# crystal 技能 — 6 个固定实拍风格场景
+# 画布固定 1600x1200；模板图可直接替换同名 jpg，无需改代码。
+# 布局字段含义：
+#   bracelet_box   手镯摆放区 [x1, y1, x2, y2]
+#   sample_column  右侧代表珠列（x 为中心线，y_start 为首颗中心，gap 为间距）
+#   label_column   中文名称文字起点（x）
+#   shadow         接触阴影（偏移/模糊/不透明度）
+#   rotation_range 手镯轻微随机旋转角度范围（度，保持俯拍视角合理性）
+#   scale_range    手镯轻微随机缩放范围
+
+canvas:
+  width: 1600
+  height: 1200
+
+scenes:
+  "01":
+    name: "米色亚麻珠宝托盘"
+    background: "templates/01.jpg"
+    bracelet_box: [80, 140, 880, 1040]
+    sample_column:
+      x: 1060
+      y_start: 280
+      gap: 230
+    label_column:
+      x: 1240
+    shadow:
+      offset: [8, 12]
+      blur: 18
+      opacity: 0.22
+    rotation_range: [-4, 4]
+    scale_range: [0.96, 1.04]
+
+  "02":
+    name: "深色丝绒珠宝托盘"
+    background: "templates/02.jpg"
+    bracelet_box: [90, 150, 890, 1050]
+    sample_column:
+      x: 1070
+      y_start: 270
+      gap: 230
+    label_column:
+      x: 1250
+    shadow:
+      offset: [6, 10]
+      blur: 22
+      opacity: 0.30
+    rotation_range: [-4, 4]
+    scale_range: [0.96, 1.04]
+
+  "03":
+    name: "浅木桌面 + 亚麻布"
+    background: "templates/03.jpg"
+    bracelet_box: [70, 130, 870, 1030]
+    sample_column:
+      x: 1055
+      y_start: 285
+      gap: 228
+    label_column:
+      x: 1235
+    shadow:
+      offset: [10, 14]
+      blur: 16
+      opacity: 0.20
+    rotation_range: [-5, 5]
+    scale_range: [0.95, 1.05]
+
+  "04":
+    name: "中性石材 + 象牙白展示台"
+    background: "templates/04.jpg"
+    bracelet_box: [85, 145, 885, 1045]
+    sample_column:
+      x: 1065
+      y_start: 275
+      gap: 232
+    label_column:
+      x: 1245
+    shadow:
+      offset: [7, 11]
+      blur: 18
+      opacity: 0.20
+    rotation_range: [-4, 4]
+    scale_range: [0.96, 1.04]
+
+  "05":
+    name: "深色木纹 + 暖色侧光"
+    background: "templates/05.jpg"
+    bracelet_box: [95, 155, 895, 1055]
+    sample_column:
+      x: 1072
+      y_start: 268
+      gap: 230
+    label_column:
+      x: 1252
+    shadow:
+      offset: [14, 10]
+      blur: 20
+      opacity: 0.28
+    rotation_range: [-3, 3]
+    scale_range: [0.96, 1.04]
+
+  "06":
+    name: "浅灰织物 / 陶瓷展示面"
+    background: "templates/06.jpg"
+    bracelet_box: [78, 138, 878, 1038]
+    sample_column:
+      x: 1058
+      y_start: 282
+      gap: 226
+    label_column:
+      x: 1238
+    shadow:
+      offset: [8, 12]
+      blur: 18
+      opacity: 0.18
+    rotation_range: [-4, 4]
+    scale_range: [0.96, 1.04]

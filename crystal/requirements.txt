@@ -1,0 +1,7 @@
+# crystal 技能最小依赖（Qwen 调用沿用仓库既有 requests 直连方式，无需额外 SDK）
+rembg
+onnxruntime
+opencv-python-headless
+Pillow
+PyYAML
+requests

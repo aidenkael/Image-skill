@@ -4,8 +4,13 @@
 *.pem
 
 # === Outputs & Generated Images ===
-outputs/
-!outputs/.gitkeep
+# 仅限仓库根 outputs/（不伤及嵌套目录，如 crystal/tests/outputs/）
+/outputs/
+!/outputs/.gitkeep
+
+# === Crystal runtime artifacts ===
+crystal/tests/outputs/*
+!crystal/tests/outputs/.gitkeep
 
 # === Test Sample Images (supplier product photos) ===
 tests/samples/*.jpg
