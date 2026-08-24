@@ -236,6 +236,18 @@ button {
   gap: 10px;
 }
 
+.variant-selector {
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.variant-selector .seg-btn {
+  flex: 0 1 96px;
+}
+
 .canvas-scroll {
   flex: 1;
   overflow: auto;
@@ -358,6 +370,24 @@ button {
 .textarea {
   min-height: 72px;
   resize: vertical;
+}
+
+.hero-source-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  color: #4b5563;
+  font-size: 12px;
+}
+
+.hero-source-preview img {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  object-fit: cover;
 }
 
 .seg {

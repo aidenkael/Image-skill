@@ -65,7 +65,7 @@ export async function runHeroTask(
   taskId: string,
 ): Promise<TaskResult> {
   const opts = request.options as HeroTaskOptions;
-  const source = await assetFile(request.assetIds[0], 'original');
+  const source = await assetFile(opts.sourceAssetId, 'original');
   if (!source) throw new Error('源商品图片不存在或已被删除');
 
   const provider = new AliyunQwenImageProvider();
@@ -88,7 +88,7 @@ export async function runHeroTask(
     const fileName = `result-${String(idx + 1).padStart(2, '0')}.${ext}`;
     const localPath = path.join(outDir, fileName);
     await fs.writeFile(localPath, buf);
-    outputs.push({ kind: 'image', url: taskOutputUrl(taskId, fileName), localPath });
+    outputs.push({ kind: 'image', url: taskOutputUrl(taskId, fileName) });
     idx += 1;
   }
   if (outputs.length === 0) throw new Error('模型未返回可用的生成结果');

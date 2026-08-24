@@ -14,13 +14,39 @@ interface CanvasAreaProps {
   kind: 'hero' | 'collage';
   latestHeroTask: TaskRecord | null;
   collageEditorRef: RefObject<CollageEditorHandle | null>;
+  collageVariantCount?: number;
+  activeCollageVariant?: number;
+  onSelectCollageVariant?(index: number): void;
 }
 
-export function CanvasArea({ kind, latestHeroTask, collageEditorRef }: CanvasAreaProps) {
+export function CanvasArea({
+  kind,
+  latestHeroTask,
+  collageEditorRef,
+  collageVariantCount = 0,
+  activeCollageVariant = 0,
+  onSelectCollageVariant,
+}: CanvasAreaProps) {
   if (kind === 'collage') {
     return (
       <section className="canvas-area">
         <div className="canvas-title">拼图画布（可拖动 / 缩放对象，双击文字编辑）</div>
+        {collageVariantCount > 0 ? (
+          <div className="variant-selector" role="tablist" aria-label="组合图方案">
+            {Array.from({ length: collageVariantCount }, (_, index) => (
+              <button
+                key={index}
+                type="button"
+                role="tab"
+                aria-selected={activeCollageVariant === index}
+                className={`seg-btn${activeCollageVariant === index ? ' is-active' : ''}`}
+                onClick={() => onSelectCollageVariant?.(index)}
+              >
+                方案 {index + 1}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="canvas-scroll">
           <CollageEditor ref={collageEditorRef} />
         </div>

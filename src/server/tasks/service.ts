@@ -6,7 +6,7 @@ import {
   TaskValidationError,
   validateCreateTaskRequest,
 } from '@/core/tasks';
-import { TaskResult } from '@/core/results';
+import { TaskResult, TaskResultSchema } from '@/core/results';
 import { COLLAGE_TEMPLATE_IDS } from '@/core/templates';
 import { runHeroTask } from './hero';
 import { runCollageTask } from './collage';
@@ -19,6 +19,13 @@ import { runtimePath, writeJson, readJson } from '@/server/storage/fs-store';
 
 function taskFile(id: string): string {
   return runtimePath('tasks', `${id}.json`);
+}
+
+/** 读取历史任务时按当前客户端结果契约清洗，避免旧 localPath 透传到 API。 */
+function clientSafeTaskRecord(record: TaskRecord): TaskRecord {
+  if (!record.result) return record;
+  const result = TaskResultSchema.safeParse(record.result);
+  return { ...record, result: result.success ? result.data : undefined };
 }
 
 export async function createTask(raw: unknown): Promise<TaskRecord> {
@@ -48,7 +55,8 @@ export async function createTask(raw: unknown): Promise<TaskRecord> {
 }
 
 export async function getTask(id: string): Promise<TaskRecord | null> {
-  return readJson<TaskRecord>(taskFile(id));
+  const task = await readJson<TaskRecord>(taskFile(id));
+  return task ? clientSafeTaskRecord(task) : null;
 }
 
 export async function listTasks(): Promise<TaskRecord[]> {
@@ -58,7 +66,7 @@ export async function listTasks(): Promise<TaskRecord[]> {
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const task = await readJson<TaskRecord>(runtimePath('tasks', name));
-    if (task) tasks.push(task);
+    if (task) tasks.push(clientSafeTaskRecord(task));
   }
   return tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }

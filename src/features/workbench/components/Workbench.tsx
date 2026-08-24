@@ -23,35 +23,65 @@ const TASK_TABS: Array<{ kind: TaskKind; label: string }> = [
 export function Workbench() {
   const wb = useWorkbench();
   const collageEditorRef = useRef<CollageEditorHandle | null>(null);
-  const [collageDoc, setCollageDoc] = useState<TemplateDocument | null>(null);
+  const [collageVariants, setCollageVariants] = useState<TemplateDocument[]>([]);
+  const [activeCollageVariant, setActiveCollageVariant] = useState(0);
   const templates = listCollageTemplates();
+  const collageDoc = collageVariants[activeCollageVariant] ?? null;
 
   const handleCreateLayout = useCallback(async () => {
     const task = await wb.createCollageTask();
     if (!task || task.status !== 'succeeded' || !task.result) return;
-    const first = task.result.outputs[0];
-    if (!first || first.kind !== 'collage') return;
-    const template = getCollageTemplate(first.templateId);
-    if (!template) return;
-    const doc = buildCollageDocument(template, wb.selectedAssetIds, {
-      title: wb.collageOptions.title ?? '',
-      includeTitle: wb.collageOptions.includeTitle,
-      sellingPoints: wb.collageOptions.sellingPoints ?? [],
-      includeSellingPoints: wb.collageOptions.includeSellingPoints,
+    const variants = task.result.outputs.flatMap((output) => {
+      if (output.kind !== 'collage') return [];
+      const template = getCollageTemplate(output.templateId);
+      if (!template) return [];
+      return [
+        buildCollageDocument(template, wb.selectedAssetIds, {
+          title: wb.collageOptions.title ?? '',
+          includeTitle: wb.collageOptions.includeTitle,
+          sellingPoints: wb.collageOptions.sellingPoints ?? [],
+          includeSellingPoints: wb.collageOptions.includeSellingPoints,
+        }),
+      ];
     });
-    setCollageDoc(doc);
-    await collageEditorRef.current?.createLayout(doc);
-    wb.setNotice('布局已创建：可拖动/缩放对象，双击文字编辑，右侧可替换图片，完成后导出 PNG');
+    if (variants.length !== task.request.count) {
+      wb.setNotice('服务端返回的布局方案不完整，请重新创建');
+      return;
+    }
+    setCollageVariants(variants);
+    setActiveCollageVariant(0);
+    await collageEditorRef.current?.createLayout(variants[0]);
+    wb.setNotice(
+      `已创建 ${variants.length} 个独立方案：可分别编辑、切换并导出 PNG`,
+    );
   }, [wb]);
+
+  const handleSelectCollageVariant = useCallback(
+    async (nextIndex: number) => {
+      if (nextIndex === activeCollageVariant) return;
+      const current = collageEditorRef.current?.getDocument();
+      const nextVariants = collageVariants.map((doc, index) =>
+        index === activeCollageVariant && current ? current : doc,
+      );
+      const next = nextVariants[nextIndex];
+      if (!next) return;
+      setCollageVariants(nextVariants);
+      setActiveCollageVariant(nextIndex);
+      await collageEditorRef.current?.createLayout(next);
+    },
+    [activeCollageVariant, collageVariants],
+  );
 
   const handleExport = useCallback(async () => {
     try {
-      await collageEditorRef.current?.exportPNG();
+      await collageEditorRef.current?.exportPNG(
+        `collage-variant-${activeCollageVariant + 1}.png`,
+      );
     } catch (e) {
       // 导出失败由编辑器抛出；此处仅兜底
       void e;
     }
-  }, []);
+  }, [activeCollageVariant]);
 
   const handleReplaceSlot = useCallback(
     async (slotIndex: number, assetId: string) => {
@@ -61,9 +91,27 @@ export function Workbench() {
         (l) => l.type === 'image' && l.slotIndex === slotIndex,
       );
       if (!slotLayer || slotLayer.type !== 'image') return;
-      await collageEditorRef.current?.replaceSlotImage(slotLayer.id, `/api/assets/${assetId}`);
+      await collageEditorRef.current?.replaceSlotImage(
+        slotLayer.id,
+        `/api/assets/${assetId}`,
+        assetId,
+      );
+      setCollageVariants((prev) =>
+        prev.map((variant, variantIndex) =>
+          variantIndex === activeCollageVariant
+            ? {
+                ...variant,
+                layers: variant.layers.map((layer) =>
+                  layer.type === 'image' && layer.id === slotLayer.id
+                    ? { ...layer, assetId, contentTransform: undefined }
+                    : layer,
+                ),
+              }
+            : variant,
+        ),
+      );
     },
-    [collageDoc],
+    [activeCollageVariant, collageDoc],
   );
 
   return (
@@ -96,13 +144,17 @@ export function Workbench() {
 
         {wb.kind === 'hero' && (
           <>
-            <CanvasArea kind="hero" latestHeroTask={wb.latestHeroTask} collageEditorRef={collageEditorRef} />
+            <CanvasArea
+              kind="hero"
+              latestHeroTask={wb.latestHeroTask}
+              collageEditorRef={collageEditorRef}
+            />
             <aside className="panel controls-panel">
               <div className="panel-title">氛围主图设置</div>
               <HeroControls
                 options={wb.heroOptions}
+                assets={wb.assets}
                 count={wb.heroCount}
-                selectedCount={wb.selectedAssetIds.length}
                 busy={wb.busy}
                 onChange={wb.patchHeroOptions}
                 onCountChange={wb.setHeroCount}
@@ -115,7 +167,14 @@ export function Workbench() {
 
         {wb.kind === 'collage' && (
           <>
-            <CanvasArea kind="collage" latestHeroTask={null} collageEditorRef={collageEditorRef} />
+            <CanvasArea
+              kind="collage"
+              latestHeroTask={null}
+              collageEditorRef={collageEditorRef}
+              collageVariantCount={collageVariants.length}
+              activeCollageVariant={activeCollageVariant}
+              onSelectCollageVariant={(index) => void handleSelectCollageVariant(index)}
+            />
             <aside className="panel controls-panel">
               <div className="panel-title">组合卖点图设置</div>
               <CollageControls

@@ -6,7 +6,7 @@ const validHero = {
   kind: 'hero',
   assetIds: ['a1'],
   count: 2,
-  options: { ratio: '1:1', person: 'auto', sceneMode: 'auto' },
+  options: { sourceAssetId: 'a1', ratio: '1:1', person: 'auto', sceneMode: 'auto' },
 };
 
 const validCollage = {
@@ -75,6 +75,18 @@ describe('任务请求校验（count 按任务类型限制）', () => {
     expect(() => validateCreateTaskRequest({ ...validHero, assetIds: [] }, ctx)).toThrow(
       TaskValidationError,
     );
+  });
+
+  it('hero sourceAssetId 必须属于且等于唯一提交资产', () => {
+    expect(() =>
+      validateCreateTaskRequest(
+        { ...validHero, options: { ...validHero.options, sourceAssetId: 'a2' } },
+        ctx,
+      ),
+    ).toThrow(/sourceAssetId/);
+    expect(() =>
+      validateCreateTaskRequest({ ...validHero, assetIds: ['a1', 'a2'] }, ctx),
+    ).toThrow(/只能提交一张/);
   });
 
   it('非法 options（缺必填字段）被拒绝', () => {

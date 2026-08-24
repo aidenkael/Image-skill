@@ -1,5 +1,7 @@
 'use client';
 
+import type { AssetRef } from '@/core/assets';
+import { assetUrl } from '@/core/results';
 import type { HeroTaskOptions } from '@/core/tasks';
 
 /**
@@ -9,8 +11,8 @@ import type { HeroTaskOptions } from '@/core/tasks';
 
 interface HeroControlsProps {
   options: HeroTaskOptions;
+  assets: AssetRef[];
   count: number;
-  selectedCount: number;
   busy: boolean;
   onChange(patch: Partial<HeroTaskOptions>): void;
   onCountChange(n: number): void;
@@ -32,15 +34,42 @@ const PERSONS: Array<{ value: HeroTaskOptions['person']; label: string }> = [
 
 export function HeroControls({
   options,
+  assets,
   count,
-  selectedCount,
   busy,
   onChange,
   onCountChange,
   onGenerate,
 }: HeroControlsProps) {
+  const sourceAsset = assets.find((asset) => asset.id === options.sourceAssetId);
+
   return (
     <div className="controls-body">
+      <div className="field">
+        <label className="field-label" htmlFor="hero-source-asset">
+          源商品图（仅 1 张）
+        </label>
+        <select
+          id="hero-source-asset"
+          className="input"
+          value={options.sourceAssetId}
+          onChange={(e) => onChange({ sourceAssetId: e.target.value })}
+        >
+          <option value="">请选择源商品图</option>
+          {assets.map((asset) => (
+            <option key={asset.id} value={asset.id}>
+              {asset.name}
+            </option>
+          ))}
+        </select>
+        {sourceAsset ? (
+          <div className="hero-source-preview">
+            <img src={assetUrl(sourceAsset.id, 'thumb')} alt={sourceAsset.name} />
+            <span>{sourceAsset.name}</span>
+          </div>
+        ) : null}
+      </div>
+
       <div className="field">
         <label className="field-label">输出数量</label>
         <div className="seg">
@@ -121,14 +150,12 @@ export function HeroControls({
         <button
           type="button"
           className="btn btn-primary"
-          disabled={busy || selectedCount === 0}
+          disabled={busy || !sourceAsset}
           onClick={onGenerate}
         >
           {busy ? '生成中…' : '生成氛围主图'}
         </button>
-        {selectedCount === 0 && (
-          <div className="hint">请先在左侧选择源商品图片（第一张为主图来源）</div>
-        )}
+        {!sourceAsset && <div className="hint">请从已上传图片中明确选择一张源商品图</div>}
       </div>
     </div>
   );

@@ -63,7 +63,7 @@ export function CollageControls({
       </div>
 
       <div className="field">
-        <label className="field-label">布局变体数量（≤ 模板数）</label>
+        <label className="field-label">可编辑方案数量（≤ 模板数）</label>
         <div className="seg">
           {[1, 2, 3].map((n) => (
             <button

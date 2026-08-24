@@ -6,8 +6,7 @@ import { z } from 'zod';
 
 export const TaskOutputImageSchema = z.object({
   kind: z.literal('image'),
-  url: z.string().optional(),
-  localPath: z.string().optional(),
+  url: z.string(),
 });
 
 export const TaskOutputCollageSchema = z.object({

@@ -46,6 +46,7 @@ export interface WorkbenchModel {
 }
 
 const DEFAULT_HERO_OPTIONS: HeroTaskOptions = {
+  sourceAssetId: '',
   ratio: '1:1',
   person: 'auto',
   sceneMode: 'auto',
@@ -144,8 +145,9 @@ export function useWorkbench(): WorkbenchModel {
   }, []);
 
   const runHero = useCallback(async (): Promise<TaskRecord | null> => {
-    if (selectedAssetIds.length === 0) {
-      setError('请先在左侧选择源商品图片');
+    const sourceAssetId = heroOptions.sourceAssetId;
+    if (!sourceAssetId || !assets.some((asset) => asset.id === sourceAssetId)) {
+      setError('请在右侧明确选择一张源商品图片');
       return null;
     }
     setBusy(true);
@@ -154,7 +156,7 @@ export function useWorkbench(): WorkbenchModel {
     try {
       const task = await createTask({
         kind: 'hero',
-        assetIds: selectedAssetIds,
+        assetIds: [sourceAssetId],
         count: heroCount,
         options: heroOptions,
       });
@@ -173,7 +175,7 @@ export function useWorkbench(): WorkbenchModel {
     } finally {
       setBusy(false);
     }
-  }, [selectedAssetIds, heroCount, heroOptions]);
+  }, [assets, heroCount, heroOptions]);
 
   const createCollageTask = useCallback(async (): Promise<TaskRecord | null> => {
     if (selectedAssetIds.length === 0) {

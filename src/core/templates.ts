@@ -15,6 +15,13 @@ export type CollageTemplateId = (typeof COLLAGE_TEMPLATE_IDS)[number];
 /** 详情页模板目录（V2 阶段保留） */
 export const DETAIL_TEMPLATE_DIR = 'detail';
 
+const ImageContentTransformSchema = z.object({
+  left: z.number(),
+  top: z.number(),
+  scaleX: z.number().positive(),
+  scaleY: z.number().positive(),
+});
+
 const ImageSlotLayerSchema = z.object({
   type: z.literal('image'),
   id: z.string().min(1),
@@ -27,6 +34,8 @@ const ImageSlotLayerSchema = z.object({
   /** 该图片槽位对应第几个选中资产（0 起） */
   slotIndex: z.number().int().min(0),
   assetId: z.string().nullable().optional(),
+  /** 图片在固定槽位框内的可编辑位置与缩放；槽位几何本身保持不变 */
+  contentTransform: ImageContentTransformSchema.optional(),
 });
 export type ImageSlotLayer = z.infer<typeof ImageSlotLayerSchema>;
 

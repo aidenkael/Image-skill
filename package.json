@@ -16,7 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "fabric": "^7.0.0",
+    "@fabricjs/browser": "npm:fabric@^7.4.0",
     "next": "^16.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

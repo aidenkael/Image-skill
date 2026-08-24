@@ -22,11 +22,11 @@ export const HeroSceneModeSchema = z.enum(['auto', 'prompt']);
 export type HeroSceneMode = z.infer<typeof HeroSceneModeSchema>;
 
 export const HeroTaskOptionsSchema = z.object({
+  sourceAssetId: z.string().min(1),
   ratio: HeroRatioSchema,
   person: HeroPersonSchema,
   sceneMode: HeroSceneModeSchema,
   scenePrompt: z.string().max(500).optional(),
-  referenceAssetIds: z.array(z.string().min(1)).max(8).optional(),
 });
 export type HeroTaskOptions = z.infer<typeof HeroTaskOptionsSchema>;
 
@@ -113,6 +113,12 @@ export function validateCreateTaskRequest(
       throw new TaskValidationError(`氛围主图选项不合法：${detail}`);
     }
     req.options = parsed.data;
+    const [onlyAssetId] = req.assetIds;
+    if (req.assetIds.length !== 1 || onlyAssetId !== parsed.data.sourceAssetId) {
+      throw new TaskValidationError(
+        '氛围主图必须且只能提交一张源商品图片，并与 sourceAssetId 一致',
+      );
+    }
   } else if (req.kind === 'collage') {
     const parsed = CollageTaskOptionsSchema.safeParse(req.options);
     if (!parsed.success) {

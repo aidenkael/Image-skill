@@ -12,13 +12,15 @@ import { downloadBlob } from '@/editor/fabric/export';
 
 export interface CollageEditorHandle {
   createLayout(doc: TemplateDocument): Promise<void>;
-  exportPNG(): Promise<void>;
-  replaceSlotImage(layerId: string, src: string): Promise<void>;
+  getDocument(): TemplateDocument | null;
+  exportPNG(fileName?: string): Promise<void>;
+  replaceSlotImage(layerId: string, src: string, assetId: string): Promise<void>;
 }
 
 export const CollageEditor = forwardRef<CollageEditorHandle>(function CollageEditor(_props, ref) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<EditorCanvasController | null>(null);
+  const documentRef = useRef<TemplateDocument | null>(null);
 
   useImperativeHandle(
     ref,
@@ -36,15 +38,24 @@ export const CollageEditor = forwardRef<CollageEditorHandle>(function CollageEdi
           doc,
           (assetId) => `/api/assets/${assetId}`,
         );
+        documentRef.current = doc;
       },
-      async exportPNG() {
+      getDocument() {
+        const doc = documentRef.current;
+        const controller = controllerRef.current;
+        if (!doc || !controller) return null;
+        const current = { ...doc, layers: controller.getDocument() };
+        documentRef.current = current;
+        return current;
+      },
+      async exportPNG(fileName = 'collage-export.png') {
         const c = controllerRef.current;
         if (!c) throw new Error('请先创建布局再导出');
         const blob = await c.exportPNG(2);
-        downloadBlob(blob, 'collage-export.png');
+        downloadBlob(blob, fileName);
       },
-      async replaceSlotImage(layerId: string, src: string) {
-        await controllerRef.current?.replaceSlotImage(layerId, src);
+      async replaceSlotImage(layerId: string, src: string, assetId: string) {
+        await controllerRef.current?.replaceSlotImage(layerId, src, assetId);
       },
     }),
     [],
@@ -54,6 +65,7 @@ export const CollageEditor = forwardRef<CollageEditorHandle>(function CollageEdi
     () => () => {
       controllerRef.current?.dispose();
       controllerRef.current = null;
+      documentRef.current = null;
     },
     [],
   );

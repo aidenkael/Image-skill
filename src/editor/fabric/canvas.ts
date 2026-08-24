@@ -10,7 +10,7 @@ import { exportPNG } from './export';
 
 export interface EditorCanvasController {
   /** 替换某个图片槽位的资产（保留槽位几何） */
-  replaceSlotImage(layerId: string, src: string): Promise<void>;
+  replaceSlotImage(layerId: string, src: string, assetId: string): Promise<void>;
   /** 序列化当前可编辑状态 → 编辑器文档 */
   getDocument(): EditorLayer[];
   /** 导出 PNG Blob */
@@ -23,7 +23,7 @@ export async function createEditorCanvas(
   doc: TemplateDocument,
   getAssetSrc: (assetId: string) => string,
 ): Promise<EditorCanvasController> {
-  const fabric = await import('fabric');
+  const fabric = await import('@fabricjs/browser');
   const canvasEl = document.createElement('canvas');
   container.appendChild(canvasEl);
   const canvas = new fabric.Canvas(canvasEl, {
@@ -41,12 +41,17 @@ export async function createEditorCanvas(
   canvas.requestRenderAll();
 
   return {
-    async replaceSlotImage(layerId: string, src: string) {
-      const existing = canvas
-        .getObjects()
-        .find((o) => (o as unknown as { layerId?: string }).layerId === layerId);
+    async replaceSlotImage(layerId: string, src: string, assetId: string) {
+      const objects = canvas.getObjects();
+      const existing = objects.find(
+        (o) => (o as unknown as { layerId?: string }).layerId === layerId,
+      );
       if (!existing) return;
-      const slot = (existing as unknown as { slot?: ImageSlotLayer }).slot;
+      const index = objects.indexOf(existing);
+      const previousSlot = (existing as unknown as { slot?: ImageSlotLayer }).slot;
+      const slot = previousSlot
+        ? { ...previousSlot, assetId, contentTransform: undefined }
+        : undefined;
       const img = await (async () => {
         try {
           return await (fabric.FabricImage as unknown as {
@@ -63,7 +68,7 @@ export async function createEditorCanvas(
       meta.layerId = layerId;
       meta.layerType = 'image';
       meta.slot = slot;
-      canvas.add(img as never);
+      canvas.insertAt(index, img as never);
       canvas.requestRenderAll();
     },
 

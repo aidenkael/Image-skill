@@ -8,9 +8,9 @@ importers:
 
   .:
     dependencies:
-      fabric:
-        specifier: ^7.0.0
-        version: 7.4.0
+      '@fabricjs/browser':
+        specifier: npm:fabric@^7.4.0
+        version: fabric@7.4.0
       next:
         specifier: ^16.0.0
         version: 16.3.2(@types/node@24.13.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

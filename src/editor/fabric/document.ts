@@ -6,7 +6,7 @@ import { applyImageFit } from './render';
  * 领域契约是 core 里的 EditorLayer / TemplateDocument，不把 Fabric 内部结构当作领域契约。
  */
 
-export type FabricNamespace = typeof import('fabric');
+export type FabricNamespace = typeof import('@fabricjs/browser');
 export type AnyFabricObject = Record<string, unknown> & {
   left?: number;
   top?: number;
@@ -29,7 +29,12 @@ export function attachMeta(
 ): void {
   obj.layerId = layer.id;
   obj.layerType = layer.type;
-  if (slot) obj.slot = slot;
+  if (slot) {
+    obj.slot = {
+      ...slot,
+      contentTransform: slot.contentTransform ? { ...slot.contentTransform } : undefined,
+    };
+  }
 }
 
 /** 加载图片（URL → FabricImage），失败返回 null */
@@ -131,17 +136,19 @@ export function serializeDocument(canvas: unknown): EditorLayer[] {
     const scaleY = obj.scaleY ?? 1;
     if (layerType === 'image') {
       const slot = obj.slot as ImageSlotLayer | undefined;
+      if (!slot) continue;
       layers.push({
         type: 'image',
         id: layerId,
-        x: left,
-        y: top,
-        width: (obj.width ?? 0) * scaleX,
-        height: (obj.height ?? 0) * scaleY,
-        fit: slot?.fit ?? 'cover',
-        radius: slot?.radius,
-        slotIndex: slot?.slotIndex ?? 0,
-        assetId: slot?.assetId ?? null,
+        x: slot.x,
+        y: slot.y,
+        width: slot.width,
+        height: slot.height,
+        fit: slot.fit,
+        radius: slot.radius,
+        slotIndex: slot.slotIndex,
+        assetId: slot.assetId ?? null,
+        contentTransform: { left, top, scaleX, scaleY },
       });
     } else if (layerType === 'text') {
       layers.push({
