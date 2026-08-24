@@ -2,9 +2,10 @@
 """crystal 技能本地验证（无网络、无 API 调用）。
 
 覆盖：bbox 校验、schema 无 group_id、validate_placements 结构校验、
-insert_representative 两图输入 + [[], [target_box]] bbox 结构（mock _call_wan）、
-compose 顺序合成结构、一次性多参考合成代码零残留、wan2.7-image-pro 默认模型、
-凭证/端点规则、本地标注。
+build_representative_assets（path + source_bbox）、generate_representative_edit
+两图输入 + [[source_bbox], [target_box]]、compose 独立性不变量（同一干净 base）、
+确定性局部合并（区域外像素不变）、一次性合成/顺序插入零残留、
+wan2.7-image-pro 默认模型、凭证/端点规则、本地标注。
 """
 import copy  # noqa: E402
 import os
@@ -22,8 +23,8 @@ OUT.mkdir(exist_ok=True)
 
 src_text = (Path(crystal.__file__)).read_text(encoding="utf-8")
 
-# 1) 主流水线不得依赖 rembg/本地合成（方向守卫）
-assert "import rembg" not in src_text and "import cv2" not in src_text, "主流水线不得回到 rembg/本地合成"
+# 1) 主流水线不得依赖 rembg/本地抠图合成（方向守卫）
+assert "import rembg" not in src_text and "import cv2" not in src_text, "主流水线不得回到 rembg/本地抠图合成"
 print("[ok] 主流水线无 rembg/cv2 依赖")
 
 # 2) bbox 校验：bbox1000_to_pixels 直接拒绝反向/零面积（先校验后转换）
@@ -96,34 +97,29 @@ except ValueError:
     pass
 print("[ok] 空/不确定名称显式拒绝；type_count 可选行为保持")
 
-# 5) build_representative_crops()：每组一个文件，短边不足 min_side 放大
+# 5) build_representative_assets()：每组一个资产（path + source_bbox），
+#    source_bbox 有效且落在参考图内，短边满足 min_side
+from PIL import Image  # noqa: E402
 crs = [{"display_name": "A", "visual_identity": "x", "representative_bbox_1000": [100, 100, 200, 200]},
        {"display_name": "B", "visual_identity": "x", "representative_bbox_1000": [400, 400, 600, 600]},
        {"display_name": "C", "visual_identity": "x", "representative_bbox_1000": [10, 10, 40, 40]}]
 refs_dir = OUT / "refs"
-paths = crystal.build_representative_crops(SAMPLE, crs, refs_dir, min_side=64)
-assert len(paths) == 3, "每组应生成一个独立参考文件"
-assert all(p.name == f"reference_{i:02d}.png" for i, p in enumerate(paths, 1))
-from PIL import Image  # noqa: E402
-sample_im = Image.open(SAMPLE)
-sw, sh = sample_im.size
-
-
-def crop_px(b):
-    x1, y1, x2, y2 = b
-    return (round(x2 / 1000 * sw) - round(x1 / 1000 * sw),
-            round(y2 / 1000 * sh) - round(y1 / 1000 * sh))
-
-
-expected_px = [crop_px(c["representative_bbox_1000"]) for c in crs]
-for p, (ew, eh) in zip(paths, expected_px):
+assets = crystal.build_representative_assets(SAMPLE, crs, refs_dir, min_side=64)
+assert len(assets) == 3, "每组应生成一个代表资产"
+for i, asset in enumerate(assets, 1):
+    p = Path(asset["path"])
+    assert p.name == f"reference_{i:02d}.png" and p.exists()
     im = Image.open(p)
     assert min(im.size) >= 64, f"{p.name} 短边应放大到至少 64，实际 {im.size}"
-    if ew >= 64 and eh >= 64:
-        assert im.size == (ew, eh), f"{p.name} 短边已足不应放大: {im.size} != {(ew, eh)}"
-tiny = Image.open(paths[2])
-assert min(tiny.size) == 64, f"小裁剪短边应精确放大到 min_side=64，实际 {tiny.size}"
-print("[ok] build_representative_crops 每组一文件 + min_side 放大")
+    sb = asset["source_bbox"]
+    x1, y1, x2, y2 = sb
+    assert x1 < x2 and y1 < y2, f"source_bbox 必须有效: {sb}"
+    assert 0 <= x1 and 0 <= y1 and x2 <= im.width and y2 <= im.height, \
+        f"source_bbox 必须落在参考图内: {sb} vs {im.size}"
+# 非边界组的上下文裁剪应比组件框更大（source_bbox 不贴左/上边）
+sb0 = assets[0]["source_bbox"]
+assert sb0[0] > 0 and sb0[1] > 0, "上下文裁剪应包含组件周边，source_bbox 不应贴边"
+print("[ok] build_representative_assets 每组一资产 + source_bbox 有效在图内 + min_side")
 
 # 6) validate_placements：数量/缺失/重复/反向零面积/排序返回
 pl_good = {"placements": [
@@ -191,19 +187,24 @@ finally:
             os.environ[k] = v
 print("[ok] 默认模型 wan2.7-image-pro；QWEN_EDIT_MODEL 不控制 Crystal")
 
-# 8) 架构守卫：一次性多参考合成零残留，无重试/回退/组数上限
+# 8) 架构守卫：一次性合成与顺序插入零残留，无重试/回退
 for gone in ("call_edit", "EDIT_PROMPT", "MAX_INPUT_IMAGES", "MAX_BEAD_GROUPS",
-             "_groups_text", "negative_prompt", "negative prompt",
-             "prompt_extend", "qwen-image-2.0-pro", "build_bead_sheet",
-             "bead_sheet", "retry", "fallback"):
-    assert gone not in src_text, f"一次性合成/回退残留: {gone}"
+             "_groups_text", "negative_prompt", "prompt_extend",
+             "qwen-image-2.0-pro", "build_bead_sheet", "bead_sheet",
+             "insert_representative", "build_representative_crops",
+             "current = step_out", "[[],", "placed later",
+             "retry", "fallback"):
+    assert gone not in src_text, f"旧架构/回退残留: {gone}"
 assert "wan2.7-image-pro" in src_text, "Crystal 默认模型须为 wan2.7-image-pro"
 assert "CRYSTAL_IMAGE_MODEL" in src_text, "须支持 CRYSTAL_IMAGE_MODEL 覆盖"
 for need in ("_call_wan", "BASE_PROMPT", "INSERT_PROMPT",
-             "generate_base_scene", "insert_representative",
-             "compose_representatives", "validate_placements", "bbox_list"):
-    assert need in src_text, f"缺少分阶段架构组件: {need}"
-print("[ok] 一次性多参考合成零残留；分阶段架构组件齐全；无重试/回退")
+             "generate_base_scene", "build_representative_assets",
+             "generate_representative_edit", "merge_independent_edits",
+             "_paste_feathered_region", "_expand_pixel_box",
+             "compose_representatives", "validate_placements",
+             "bbox_list", "ImageFilter"):
+    assert need in src_text, f"缺少独立编辑架构组件: {need}"
+print("[ok] 一次性合成/顺序插入零残留；独立编辑+确定性合并组件齐全；无重试/回退")
 
 # 9) 凭证/端点规则：仅 DASHSCOPE_API_KEY；sk-sp- → Token Plan；非 Token Plan 无 URL → 失败
 saved2 = {k: os.environ.get(k) for k in ("DASHSCOPE_API_URL", "DASHSCOPE_API_KEY")}
@@ -230,11 +231,12 @@ finally:
             os.environ[k] = v
 print("[ok] 凭证只读 DASHSCOPE_API_KEY；端点规则（Token Plan / 无 URL 明确失败）")
 
-# 10) mock _call_wan：insert_representative 两图输入 + [[], [target_box]] 结构
+# 10) mock _call_wan：generate_representative_edit 两图输入 + [[source_bbox], [target_box]]
 canvas = Image.new("RGB", (1200, 1600), (235, 232, 226))
 canvas.save(OUT / "t_canvas.png")
 rep_img = Image.new("RGB", (96, 96), (200, 160, 180))
 rep_img.save(OUT / "t_rep.png")
+asset = {"path": OUT / "t_rep.png", "source_bbox": [10, 10, 80, 80]}
 
 calls = []
 
@@ -250,17 +252,18 @@ def fake_call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None)
 orig_call_wan = crystal._call_wan
 crystal._call_wan = fake_call_wan
 try:
-    out = crystal.insert_representative(OUT / "t_canvas.png", OUT / "t_rep.png",
-                                        [100, 100, 200, 200], OUT / "t_insert.png")
-    assert out == Path(OUT / "t_insert.png")
-    assert len(calls) == 1, "一次插入恰好一次调用"
+    out = crystal.generate_representative_edit(OUT / "t_canvas.png", asset,
+                                               [100, 100, 200, 200],
+                                               OUT / "t_edit.png")
+    assert out == Path(OUT / "t_edit.png")
+    assert len(calls) == 1, "一次代表件编辑恰好一次调用"
     c = calls[0]
-    assert len(c["images"]) == 2, "插入调用必须是两图输入"
-    assert c["images"][0] == Path(OUT / "t_rep.png"), "Image 1 必须是代表件参考"
-    assert c["images"][1] == Path(OUT / "t_canvas.png"), "Image 2 必须是当前画布"
-    assert c["bbox_list"] == [[], [[120, 160, 240, 320]]], \
-        f"bbox_list 必须恰好 [[], [target_box]]，实际 {c['bbox_list']}"
-    assert c["size"] == "1200*1600", "插入尺寸必须跟随画布"
+    assert len(c["images"]) == 2, "独立编辑必须是两图输入"
+    assert c["images"][0] == Path(OUT / "t_rep.png"), "Image 1 必须是代表资产"
+    assert c["images"][1] == Path(OUT / "t_canvas.png"), "Image 2 必须是未变更 base"
+    assert c["bbox_list"] == [[[10, 10, 80, 80]], [[120, 160, 240, 320]]], \
+        f"bbox_list 必须为 [[source_bbox], [target_box]]，实际 {c['bbox_list']}"
+    assert c["size"] == "1200*1600", "编辑尺寸必须跟随 base 画布"
     assert c["prompt"] == crystal.INSERT_PROMPT
 
     # generate_base_scene：两图（手镯裁剪 + 模板），无散珠、无 bbox_list
@@ -272,39 +275,80 @@ try:
     assert len(cb["images"]) == 2 and cb["bbox_list"] is None, \
         "基础场景不得传代表参考或 bbox"
     assert cb["prompt"] == crystal.BASE_PROMPT
+    assert "placed later" not in cb["prompt"], "base prompt 不得提及后续组件"
+finally:
+    crystal._call_wan = orig_call_wan
+print("[ok] generate_representative_edit/base 结构（mock _call_wan，无网络）")
 
-    # compose_representatives：按 reference 顺序每件恰好一次插入（非重试循环）
-    calls.clear()
-    rep2 = OUT / "t_rep2.png"
-    Image.new("RGB", (96, 96), (150, 190, 200)).save(rep2)
-    placements = crystal.validate_placements({"placements": [
-        {"reference_index": 2, "bbox_1000": [600, 700, 700, 800]},
-        {"reference_index": 1, "bbox_1000": [100, 700, 200, 800]}]}, 2)
+# 11) 独立性不变量：compose 的每次编辑都收到同一张干净 base，
+#     任何编辑产物都不得成为另一次编辑的输入
+edit_calls = []
+
+
+def fake_edit(base_path, representative_asset, bbox_1000, output_path):
+    edit_calls.append({"base": Path(base_path), "out": Path(output_path),
+                       "asset": representative_asset})
+    Image.new("RGB", (1200, 1600), (225, 222, 216)).save(output_path)
+    return Path(output_path)
+
+
+assets3 = [{"path": OUT / "t_rep.png", "source_bbox": [10, 10, 80, 80]}] * 3
+placements3 = crystal.validate_placements({"placements": [
+    {"reference_index": 1, "bbox_1000": [100, 100, 200, 200]},
+    {"reference_index": 2, "bbox_1000": [600, 700, 700, 800]},
+    {"reference_index": 3, "bbox_1000": [300, 800, 400, 900]}]}, 3)
+
+orig_edit = crystal.generate_representative_edit
+crystal.generate_representative_edit = fake_edit
+try:
     final_out = crystal.compose_representatives(
-        OUT / "t_canvas.png", [OUT / "t_rep.png", rep2], placements,
+        OUT / "t_canvas.png", assets3, placements3,
         OUT / "t_composed.png", OUT / "t_work")
     assert final_out == Path(OUT / "t_composed.png") and final_out.exists()
-    assert len(calls) == 2, "N 组恰好 N 次插入调用"
-    assert calls[0]["images"][0] == Path(OUT / "t_rep.png"), "第 1 步应插入 reference 1"
-    assert calls[1]["images"][0] == rep2, "第 2 步应插入 reference 2"
-    assert calls[0]["images"][1] == Path(OUT / "t_canvas.png"), "第 1 步画布应为 base"
-    assert calls[1]["images"][1] == OUT / "t_work" / "insert_01.png", \
-        "后续步骤画布应为上一步产物（顺序串行）"
-    assert calls[0]["output_path"] == OUT / "t_work" / "insert_01.png", \
-        "中间步产物应落在 workdir"
-    assert calls[1]["output_path"] == Path(OUT / "t_composed.png"), \
-        "最后一步产物应为最终输出"
+    assert len(edit_calls) == 3, "N 组恰好 N 次独立编辑"
+    base_arg = edit_calls[0]["base"]
+    assert base_arg == Path(OUT / "t_canvas.png")
+    outs = {c["out"] for c in edit_calls}
+    for c in edit_calls:
+        assert c["base"] == base_arg, "每次编辑必须使用同一张干净 base"
+        assert c["base"] not in outs, "编辑产物不得作为另一次编辑的输入"
     try:
-        crystal.compose_representatives(OUT / "t_canvas.png", [OUT / "t_rep.png"],
-                                        placements, OUT / "t_x.png", OUT / "t_work")
-        raise SystemExit("FAIL: 参考图数量与 placements 不一致应被拒绝")
+        crystal.compose_representatives(OUT / "t_canvas.png", assets3[:2],
+                                        placements3, OUT / "t_x.png", OUT / "t_work")
+        raise SystemExit("FAIL: 代表资产数量与 placements 不一致应被拒绝")
     except ValueError:
         pass
 finally:
-    crystal._call_wan = orig_call_wan
-print("[ok] insert_representative/base/compose 结构（mock _call_wan，无网络）")
+    crystal.generate_representative_edit = orig_edit
+print("[ok] compose 独立性不变量（同一干净 base，编辑产物互不消费）")
 
-# 11) _call_wan bbox_list 长度守卫（长度与图片数不一致时不发请求即拒绝）
+# 12) 确定性局部合并：区域外像素与 base 完全一致，目标中心来自编辑图，尺寸不变
+base_im = Image.new("RGB", (400, 400), (10, 10, 10))
+base_im.save(OUT / "t_merge_base.png")
+edited_im = Image.new("RGB", (400, 400), (200, 0, 0))
+edited_im.save(OUT / "t_merge_edit.png")
+merged = crystal.merge_independent_edits(
+    OUT / "t_merge_base.png", [OUT / "t_merge_edit.png"],
+    [{"reference_index": 1, "bbox_1000": [250, 250, 500, 500]}],
+    OUT / "t_merged.png")
+m = Image.open(merged)
+assert m.size == (400, 400), "合并输出尺寸必须等于 base"
+assert m.getpixel((20, 20)) == (10, 10, 10), "远区域外像素必须与 base 完全一致"
+assert m.getpixel((380, 380)) == (10, 10, 10), "远区域外像素必须与 base 完全一致"
+assert m.getpixel((150, 150)) == (200, 0, 0), "目标中心必须来自编辑图"
+# 尺寸不一致显式拒绝
+bad_edit = Image.new("RGB", (300, 300), (0, 200, 0))
+bad_edit.save(OUT / "t_merge_bad.png")
+try:
+    crystal.merge_independent_edits(OUT / "t_merge_base.png", [OUT / "t_merge_bad.png"],
+                                    [{"reference_index": 1, "bbox_1000": [250, 250, 500, 500]}],
+                                    OUT / "t_merged_bad.png")
+    raise SystemExit("FAIL: 编辑图尺寸不一致应被拒绝")
+except ValueError:
+    pass
+print("[ok] 确定性局部合并（区域外不变/中心来自编辑图/尺寸守卫）")
+
+# 13) _call_wan bbox_list 长度守卫（长度与图片数不一致时不发请求即拒绝）
 try:
     crystal._call_wan([OUT / "t_rep.png", OUT / "t_canvas.png"],
                       crystal.INSERT_PROMPT, OUT / "t_unused.png",
@@ -314,7 +358,7 @@ except ValueError:
     pass
 print("[ok] _call_wan bbox_list 长度守卫")
 
-# 12) 本地准备 + 编辑式标注（无网络）
+# 14) 本地准备 + 编辑式标注（无网络）
 clean = crystal.build_clean_source(SAMPLE, good["bracelet_bbox_1000"], OUT / "t_clean.jpg")
 assert clean.exists()
 # 短边不足时 clean_source 放大到 >=240（wan2.7-image-pro 输入最低分辨率）

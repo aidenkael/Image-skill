@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """crystal 技能 — 水晶手镯参考图（bbox 逐件插入主流水线，唯一运行时入口）。
 
-主流水线（规划式多阶段、零重试；取代一次性多参考图合成）：
-    新鲜 analysis → base：清理裁剪 + 每组独立代表件裁剪 + 一次场景生成（无散珠）
-    → Agent 一次性决定全部摆放框 placements.json
-    → compose：每件代表件恰好一次 wan2.7-image-pro bbox_list 插入调用（顺序串行，非重试）
+主流水线（规划式多阶段、零重试；取代一次性多参考图合成与顺序插入）：
+    新鲜 analysis → base：清理裁剪 + 每组上下文代表资产 + 一次干净场景生成（无散珠）
+    → 强制 base QA 门 → Agent 一次性决定全部摆放框 placements.json
+    → compose：N 次独立局部编辑（每次都用同一张干净 base，源组件与目标区域均以 bbox_list 显式选中）
+    → Pillow 羽毛合并仅合并 N 个被编辑的局部区域回同一干净 base
     → Agent 视觉 QA → 本地 Pillow 编辑式标注 → 成品图
 
 凭证仅从环境变量 DASHSCOPE_API_KEY（.env）读取，代码不硬编码密钥，无其他凭证回退；
@@ -61,7 +62,7 @@ import tempfile
 from pathlib import Path
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 SKILL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SKILL_DIR.parent
@@ -245,23 +246,48 @@ def build_clean_source(input_path, bbox_1000, out_path, margin=0.06, min_side=38
     return Path(out_path)
 
 
-def build_representative_crops(input_path, groups, out_dir, min_side=384):
-    """独立代表件参考图：每组一个独立裁剪文件（不再拼 contact sheet）。
+def build_representative_assets(
+    input_path,
+    groups,
+    out_dir,
+    context_ratio=0.35,
+    min_side=384,
+):
+    """每组一个带局部上下文的代表资产：裁剪保留组件周边上下文，
+    但精确源组件由 source_bbox 在调用时以 bbox_list 显式选中。
 
-    这些裁剪仅作为可见身份参考；物理尺度由 Image 1 + visual_identity 决定，
-    不由独立参考图的像素尺寸决定。短边不足 min_side 时仅放大（不缩小）。"""
+    周边裁剪只是上下文，身份选择靠 bbox；短边不足 min_side 时仅放大（不缩小），
+    source_bbox 同步缩放。"""
     im = Image.open(input_path).convert("RGB")
     w, h = im.size
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    paths = []
+    assets = []
+
     for i, group in enumerate(groups, 1):
-        crop = im.crop(
-            bbox1000_to_pixels(
-                group["representative_bbox_1000"], w, h
-            )
+        x1, y1, x2, y2 = bbox1000_to_pixels(
+            group["representative_bbox_1000"], w, h
         )
+
+        bw = x2 - x1
+        bh = y2 - y1
+        pad_x = max(2, round(bw * context_ratio))
+        pad_y = max(2, round(bh * context_ratio))
+
+        cx1 = max(0, x1 - pad_x)
+        cy1 = max(0, y1 - pad_y)
+        cx2 = min(w, x2 + pad_x)
+        cy2 = min(h, y2 + pad_y)
+
+        crop = im.crop((cx1, cy1, cx2, cy2))
+
+        source_box = [
+            x1 - cx1,
+            y1 - cy1,
+            x2 - cx1,
+            y2 - cy1,
+        ]
 
         scale = max(1.0, min_side / min(crop.width, crop.height))
         if scale > 1.0:
@@ -272,12 +298,17 @@ def build_representative_crops(input_path, groups, out_dir, min_side=384):
                 ),
                 Image.LANCZOS,
             )
+            source_box = [round(v * scale) for v in source_box]
 
         path = out_dir / f"reference_{i:02d}.png"
         crop.save(path)
-        paths.append(path)
 
-    return paths
+        assets.append({
+            "path": path,
+            "source_bbox": source_box,
+        })
+
+    return assets
 
 
 # ---------------------------------------------------------------- 编辑调用
@@ -293,20 +324,21 @@ BASE_PROMPT = """Create one photorealistic commercial/editorial jewelry photogra
 Image 1 is the only source of truth for the complete bracelet.
 Image 2 is only the empty scene/background reference.
 
-Place one complete bracelet naturally into the scene from Image 2.
+Place exactly one complete bracelet naturally into the scene from Image 2.
+
 Preserve the bracelet from Image 1:
-- all beads, stones and pearls
+- every bead, stone and pearl
 - geometry and order
 - relative physical scale
 - color and transparency
 - inclusions and surface traits
-- all metal settings, spacers, connectors and ornaments
+- every metal setting, spacer, connector and ornament
 
 Do not add, remove, merge, substitute or redesign any bracelet component.
 
-Leave comfortable natural negative space around the bracelet for a few small loose jewelry components to be placed later.
+The surface around the bracelet must remain empty, clean and uncluttered.
+Do not generate any loose bead, loose stone, loose pearl, metal disc, spare component, prop or decorative object.
 
-Generate no loose representative beads in this step.
 Generate no text, labels, title, logo or watermark.
 
 Photorealistic jewelry photography.
@@ -314,26 +346,33 @@ Natural reflections and contact shadows.
 No CGI, plastic, sticker or collage appearance.
 """
 
-INSERT_PROMPT = """Place the single jewelry component from Image 1 into the selected area of Image 2.
+INSERT_PROMPT = """Transfer the selected jewelry component from Image 1 into the selected empty target region of Image 2.
 
-Image 2 is the current finished jewelry photograph.
-Edit only the selected area.
+The bounding box in Image 1 identifies the exact source component.
+The bounding box in Image 2 identifies the only target area that may be edited.
 
-Create exactly one physical loose representative matching Image 1.
-Preserve its visible geometry, color, transparency/opacity, inclusions, texture and surface traits.
-Match the physical scale implied by the selected area and the bracelet already present in Image 2.
+Create exactly one physical loose component in the selected target area.
+It must preserve the selected source component:
+- geometry
+- physical proportions
+- color
+- transparency or opacity
+- inclusions
+- texture
+- surface traits
 
-Make it look naturally placed on the surface:
-- correct contact shadow
-- correct local reflection
-- correct scene lighting
-- no floating object
-- no cutout/sticker edge
+Match the lighting and surface of Image 2.
+Create natural contact shadow and local reflection.
 
+Image 2 outside the selected target area must remain unchanged.
+Do not copy or imitate any other object from Image 2.
+Do not add any second object.
 Do not change the bracelet.
-Do not change previously placed loose representatives.
-Do not add any other object.
 Do not generate text, labels, logo or watermark.
+
+No floating object.
+No cutout edge.
+No sticker or collage appearance.
 """
 
 
@@ -343,7 +382,7 @@ def _b64url(p: Path) -> str:
 
 
 def _call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
-    """共享的 wan2.7-image-pro 调用：基础场景生成与逐件插入共用。
+    """共享的 wan2.7-image-pro 调用：基础场景生成与独立局部编辑共用。
 
     规划式多阶段、零重试：失败即抛错，不重试、不换模型、不回退。"""
     token = _token()
@@ -434,58 +473,160 @@ def generate_base_scene(clean_src, template, output_path, size="1200*1600"):
     )
 
 
-def insert_representative(canvas_path, representative_path, bbox_1000,
-                          output_path):
-    """逐件插入：Image 1 = 单件代表参考，Image 2 = 当前合成画布，
-    bbox 只在 Image 2 上，恰好一个选中区域；一次调用只插一件。"""
-    with Image.open(canvas_path) as canvas:
-        w, h = canvas.size
+def generate_representative_edit(
+    base_path,
+    representative_asset,
+    bbox_1000,
+    output_path,
+):
+    """独立局部编辑：Image 1 = 带上下文的代表资产（source_bbox 选中精确源组件），
+    Image 2 = 未变更的干净 base（target bbox 选中唯一可编辑区域）。
+
+    关键不变量：base_path 必须始终是 base 阶段原始输出；
+    任何代表件编辑的产物都不得作为另一次代表件编辑的输入。"""
+    with Image.open(base_path) as base:
+        w, h = base.size
 
     target_box = bbox1000_to_pixels(bbox_1000, w, h)
 
     return _call_wan(
-        [representative_path, canvas_path],
+        [
+            representative_asset["path"],
+            base_path,
+        ],
         INSERT_PROMPT,
         output_path,
         size=f"{w}*{h}",
         bbox_list=[
-            [],
+            [representative_asset["source_bbox"]],
             [target_box],
         ],
     )
 
 
-def compose_representatives(base_path, representative_paths, placements,
-                            output_path, workdir):
-    """顺序合成：按 reference 顺序每件恰好一次插入调用；这是生产流水线，
-    不是重试循环。N 组 = 1 次基础场景（已在 base 阶段）+ N 次插入。"""
-    if len(representative_paths) != len(placements):
-        raise ValueError("代表参考图数量与 placements 数量不一致")
+def _expand_pixel_box(box, width, height, ratio=0.45):
+    """合并区域外扩：覆盖模型在目标框周边渲染的接触阴影/反射。"""
+    x1, y1, x2, y2 = box
+    bw = x2 - x1
+    bh = y2 - y1
+
+    px = max(4, round(bw * ratio))
+    py = max(4, round(bh * ratio))
+
+    return [
+        max(0, x1 - px),
+        max(0, y1 - py),
+        min(width, x2 + px),
+        min(height, y2 + px),
+    ]
+
+
+def _paste_feathered_region(canvas, edited, region, feather_ratio=0.12):
+    """场景区域合并：只取编辑图在 region 内的局部场景，边缘高斯羽化后贴回画布。
+    不是水晶分割/抠图合成——模型已渲染好代表件及其局部表面/阴影/反射。"""
+    x1, y1, x2, y2 = region
+    patch = edited.crop((x1, y1, x2, y2))
+
+    pw, ph = patch.size
+    feather = max(4, round(min(pw, ph) * feather_ratio))
+
+    mask = Image.new("L", (pw, ph), 0)
+    draw = ImageDraw.Draw(mask)
+
+    left = min(feather, max(0, pw // 3))
+    top = min(feather, max(0, ph // 3))
+    right = max(left + 1, pw - left)
+    bottom = max(top + 1, ph - top)
+
+    draw.rectangle(
+        [left, top, right - 1, bottom - 1],
+        fill=255,
+    )
+    mask = mask.filter(
+        ImageFilter.GaussianBlur(radius=max(1, feather / 2))
+    )
+
+    canvas.paste(patch, (x1, y1), mask)
+
+
+def merge_independent_edits(
+    base_path,
+    edited_paths,
+    placements,
+    output_path,
+):
+    """确定性合并：把 N 张独立编辑图的局部区域羽毛贴回同一张干净 base。
+    区域外像素与 base 完全一致。"""
+    if len(edited_paths) != len(placements):
+        raise ValueError("独立编辑图数量与 placements 数量不一致")
+
+    canvas = Image.open(base_path).convert("RGB")
+    w, h = canvas.size
+
+    for edited_path, placement in zip(edited_paths, placements):
+        edited = Image.open(edited_path).convert("RGB")
+
+        if edited.size != canvas.size:
+            raise ValueError(
+                f"独立编辑图尺寸不一致: {edited.size} != {canvas.size}"
+            )
+
+        target = bbox1000_to_pixels(
+            placement["bbox_1000"], w, h
+        )
+        region = _expand_pixel_box(target, w, h)
+
+        _paste_feathered_region(
+            canvas,
+            edited,
+            region,
+        )
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output_path, quality=95)
+
+    return output_path
+
+
+def compose_representatives(
+    base_path,
+    representative_assets,
+    placements,
+    output_path,
+    workdir,
+):
+    """N 次独立局部编辑（全部针对同一张干净 base）+ 确定性局部合并。
+    这是规划式生产工作，不是重试循环；任何编辑产物都不进入另一次编辑。"""
+    if len(representative_assets) != len(placements):
+        raise ValueError("代表参考数量与 placements 数量不一致")
 
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
 
-    current = Path(base_path)
+    edited_paths = []
 
     for i, placement in enumerate(placements, 1):
         ref_index = placement["reference_index"]
-        ref_path = representative_paths[ref_index - 1]
+        asset = representative_assets[ref_index - 1]
 
-        step_out = (
-            Path(output_path)
-            if i == len(placements)
-            else workdir / f"insert_{i:02d}.png"
-        )
+        edit_out = workdir / f"edit_{i:02d}.png"
 
-        insert_representative(
-            current,
-            ref_path,
+        generate_representative_edit(
+            base_path,
+            asset,
             placement["bbox_1000"],
-            step_out,
+            edit_out,
         )
-        current = step_out
 
-    return Path(output_path)
+        edited_paths.append(edit_out)
+
+    return merge_independent_edits(
+        base_path,
+        edited_paths,
+        placements,
+        output_path,
+    )
 
 
 # ---------------------------------------------------------------- 编辑式标注
@@ -533,10 +674,10 @@ def render_labels(input_path, labels, output_path, font_size=34):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="水晶手镯参考图：base 场景生成 → placements → 逐件 bbox 插入 → 本地编辑式标注")
+        description="水晶手镯参考图：base 干净场景 → 强制 QA 门 → placements → N 次独立局部编辑 + 确定性合并 → 本地编辑式标注")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_base = sub.add_parser("base", help="清理裁剪 + 代表件裁剪 + 一次基础场景生成（无散珠）")
+    p_base = sub.add_parser("base", help="清理裁剪 + 代表资产 + 一次干净基础场景生成（无散珠）")
     p_base.add_argument("--input", required=True)
     p_base.add_argument("--analysis", required=True)
     p_base.add_argument("--output", required=True)
@@ -544,9 +685,9 @@ def main():
     p_base.add_argument("--size", default="1200*1600")
     p_base.add_argument("--workdir", default=None)
 
-    p_compose = sub.add_parser("compose", help="按 placements 逐件插入代表件（每件恰好一次调用，无重试）")
-    p_compose.add_argument("--input", required=True, help="base 阶段输出的场景图")
-    p_compose.add_argument("--source", required=True, help="原始手镯实拍图（重建代表件裁剪）")
+    p_compose = sub.add_parser("compose", help="N 次独立局部编辑（同一干净 base）+ 确定性局部合并（无重试）")
+    p_compose.add_argument("--input", required=True, help="base 阶段输出的未变更场景图")
+    p_compose.add_argument("--source", required=True, help="原始手镯实拍图（重建代表资产）")
     p_compose.add_argument("--analysis", required=True)
     p_compose.add_argument("--placements", required=True)
     p_compose.add_argument("--output", required=True)
@@ -572,10 +713,10 @@ def main():
         work.mkdir(parents=True, exist_ok=True)
         clean_src = build_clean_source(args.input, analysis["bracelet_bbox_1000"],
                                        work / "clean_source.jpg")
-        representative_paths = build_representative_crops(
+        representative_assets = build_representative_assets(
             args.input, analysis["bead_groups"], work / "references")
         print(f"clean_source: {clean_src}\n"
-              f"representative crops: {[str(p) for p in representative_paths]}")
+              f"representative assets: {[str(a['path']) for a in representative_assets]}")
         try:
             generate_base_scene(clean_src, Path(args.template), args.output,
                                 args.size)
@@ -598,17 +739,17 @@ def main():
         work = Path(args.workdir) if args.workdir else \
             Path(tempfile.mkdtemp(prefix="crystal_"))
         work.mkdir(parents=True, exist_ok=True)
-        # 代表件裁剪确定性重建：同输入同 bbox 产物一致，与 base 阶段等价可复用
-        representative_paths = build_representative_crops(
+        # 代表资产确定性重建：同输入同 bbox 产物一致，与 base 阶段等价可复用
+        representative_assets = build_representative_assets(
             args.source, analysis["bead_groups"], work / "references")
         try:
-            compose_representatives(args.input, representative_paths,
-                                    placements, args.output, work / "inserts")
+            compose_representatives(args.input, representative_assets,
+                                    placements, args.output, work / "edits")
         except Exception as e:
             print(f"ERROR: {e}")
             return 2
         print(f"model_used: {_image_model()}")
-        print(f"insertion_calls: {len(placements)}")
+        print(f"independent_edit_calls: {len(placements)}")
         print(f"candidate: {args.output}")
         return 0
 
