@@ -25,18 +25,20 @@ description: 水晶手镯参考图——清理裁剪 + Agent 识别 + 珠子参�
 
 1. **目视识别**：恰好 N 类水晶珠类，且只统计物理位于手镯环体上的珠子（`type_count` = 手镯上恰好 N 种）；
    金属隔珠/银饰忽略；包装、说明纸、消磁碎石袋、散石及背景中任何类水晶物体不得计为一类、不得污染识别。
-   分组依据（通用视觉结构，非个案补丁）：由「形状 + 相对尺寸档 + 材质/色族 + 内部纹理」的可见组合决定；
-   同色族但形状或尺寸档不同的珠必须分为不同组（如 round vs square/faceted、small round vs large round、
-   translucent vs opaque）。
+   分组依据（通用可见身份，非个案补丁）：bead_groups = 手镯上视觉可区分的珠组（非矿物鉴定）；
+   分组由可见身份决定；相近色族但几何或表观尺寸实质不同也可分为不同组；
+   每组以自由文本 visual_identity 描述（几何/相对表观尺寸/颜色/透明度/纹理/表面特征），无枚举限制。
    代表珠选择：优先手镯上清晰可见、无遮挡、无金属覆盖的该类型珠；裁剪必须来自手镯环体本身，不合成被遮挡/隐藏的水晶面。
-2. **写 `analysis.json`**（0..1000 归一化坐标，严格 schema）：
+2. **写 `analysis.json`**（0..1000 归一化坐标）：
    - `bracelet_bbox_1000` 紧圈手镯环体（排除手、包装盒、纸张）；
-   - `bead_groups` 恰好 N 项：`{"group_id", "label_name": 中文市场名, "shape": round|square|faceted|barrel|other,
-     "size_tier": small|medium|large, "color_family", "material_traits", "representative_bbox_1000": 代表珠矩形}`；
-   - 代表珠矩形必须落在 `bracelet_bbox_1000` 内（代码强校验，杜绝包装/散石/背景污染）；
+   - `bead_groups`：`{"group_id", "display_name": 中文标注名, "visual_identity": 自由文本可见身份描述,
+     "representative_bbox_1000": 代表珠矩形}`；组数 = 当前源图的新鲜视觉可区分组数；
+   - `display_name` 仅用于最终 Pillow 标注，绝不进入生成 Prompt（猜测的矿名不得污染生成）；
+   - 代表矩形落在 `bracelet_bbox_1000` 内仅为坐标 sanity check；物理归属手镯是本步视觉分析职责；
    - 名称不写“疑似/可能”等措辞（代码会清洗）。
-3. **运行**：`python crystal/crystal.py run --input 原图 --types N --analysis analysis.json --output candidate.png`
-   （内部：新鲜 analysis 校验 → 清理裁剪 → 新鲜参考页 → 一次编辑调用；single-pass，不自动重试、不换模型重跑）。
+3. **运行**：`python crystal/crystal.py run --input 原图 [--types N] --analysis analysis.json --output candidate.png`
+   （`--types` 可选：提供则强校验组数；缺省用当前分析的新鲜组数，绝不复用历史运行；
+   内部：新鲜 analysis 校验 → 清理裁剪 → 新鲜参考页 → 一次编辑调用；single-pass，不自动重试、不换模型重跑）。
 4. **独立目视 QA** 候选图：手镯保真、恰好 N 颗散珠、与参考页一一对应、布局自然（非机械底排）、
    无文字。不可用则如实报告，不自动重跑生成。
 5. **写 `labels.json`**：按生成图中散珠实际摆放就近放名——小字、克制、错落而非居中对齐；

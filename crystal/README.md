@@ -26,8 +26,9 @@ pip install -r crystal/requirements.txt
 ## 用法
 
 ```
-# 1) Agent 识别后写 analysis.json（bracelet_bbox_1000 + 恰好 N 个 bead_groups，均为手镯上的珠类）
-python crystal/crystal.py run --input src.jpg --types 3 \
+# 1) Agent 识别后写 analysis.json（bracelet_bbox_1000 + bead_groups[visual_identity 自由文本]，均为手镯上的珠组）
+#    --types 可选：提供则强校验组数；缺省用当前分析的新鲜组数
+python crystal/crystal.py run --input src.jpg [--types N] \
     --analysis analysis.json --output candidate.png
 
 # 2) Agent 目视 QA 候选图后写 labels.json（小字就近标注，可选 point_to 引线）

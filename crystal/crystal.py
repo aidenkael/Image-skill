@@ -11,22 +11,23 @@
 
 用法:
     python crystal/crystal.py run \
-        --input src.jpg --types 3 --analysis a.json --output candidate.png
+        --input src.jpg [--types N] --analysis a.json --output candidate.png
     python crystal/crystal.py label \
         --input candidate.png --labels l.json --output final.png
 
 analysis.json（坐标 0..1000 归一化；bracelet_bbox 紧圈手镯以排除包装/手/纸张）:
     {"bracelet_bbox_1000": [x1,y1,x2,y2],
      "bead_groups": [
-       {"group_id": "g1", "label_name": "中文市场名",
-        "shape": "round|square|faceted|barrel|other",
-        "size_tier": "small|medium|large",
-        "color_family": "色族", "material_traits": "视觉材质注记",
-        "representative_bbox_1000": [x1,y1,x2,y2]}, ...]}  # 恰好 N
-珠类分组由「形状 + 相对尺寸档 + 材质/色族 + 内部纹理」的可见组合决定；
-同色族但形状或尺寸档不同的珠必须分为不同组；
-bead_groups 只统计物理位于手镯环体上的珠类，代表珠必须裁自环体本身；
-金属隔珠/银饰/包装/消磁碎石/散石/纸张/背景中任何类水晶物体不得计为一组。
+       {"group_id": "g1", "display_name": "中文标注名",
+        "visual_identity": "自由文本可见身份描述（几何/相对表观尺寸/颜色/透明度/纹理/表面特征）",
+        "representative_bbox_1000": [x1,y1,x2,y2]}, ...]}
+bead_groups = 手镯上视觉可区分的珠组（非矿物鉴定）：
+分组由可见身份决定；相近色族但几何或表观尺寸实质不同也应分为不同组；
+只统计物理位于手镯环体上的珠类，代表珠裁自环体本身（Agent 视觉分析职责）；
+代表矩形落在 bracelet_bbox 内仅为坐标 sanity check，不证明物理归属；
+金属隔珠/银饰/包装/消磁碎石/散石/纸张/背景中任何类水晶物体不得计为一组；
+--types 可选：提供则强校验组数，缺省则用当前分析的新鲜组数（不复用历史运行）。
+display_name 仅用于最终 Pillow 标注，绝不进入生成 Prompt。
 
 labels.json（像素坐标，位置应呼应生成图中散珠摆放，小字、克制、可带细引线）:
     {"labels": [{"text": "锂云母", "x": 372, "y": 1330,
@@ -118,25 +119,24 @@ def bbox1000_to_pixels(bbox, width, height):
     return px
 
 
-_SHAPES = ("round", "square", "faceted", "barrel", "other")
-_TIERS = ("small", "medium", "large")
-
-
 def _check_bbox(bbox, label):
     if not all(0.0 <= v <= 1000.0 for v in bbox):
         raise ValueError(f"{label} 超出 0-1000: {bbox}")
 
 
-def validate_analysis(raw, type_count):
-    """严格 bead_groups schema：形状/尺寸档/色族/材质齐全，代表珠必须位于手镯环体内。"""
+def validate_analysis(raw, type_count=None):
+    """bead_groups schema：group_id + display_name + visual_identity 自由文本 + 代表矩形。
+
+    type_count 可选：显式提供则强校验组数；缺省用当前分析的新鲜组数。
+    代表矩形包含关系仅为坐标 sanity check；物理归属手镯是 Agent 视觉分析职责。"""
     if not isinstance(raw, dict):
         raise ValueError("analysis 必须是 JSON 对象")
     groups = raw.get("bead_groups")
-    if not isinstance(groups, list):
-        raise ValueError("analysis 缺少 bead_groups 列表")
-    if len(groups) != type_count:
+    if not isinstance(groups, list) or not groups:
+        raise ValueError("analysis 缺少非空 bead_groups 列表")
+    if type_count is not None and len(groups) != type_count:
         raise ValueError(f"珠类组数不符: analysis 提供 {len(groups)} 组，"
-                         f"要求恰好 {type_count} 组手镯上的珠类")
+                         f"显式要求恰好 {type_count} 组")
     bb = raw.get("bracelet_bbox_1000")
     if not (isinstance(bb, (list, tuple)) and len(bb) == 4):
         raise ValueError(f"bracelet_bbox_1000 非法: {bb}")
@@ -146,18 +146,10 @@ def validate_analysis(raw, type_count):
     for i, g in enumerate(groups):
         if not isinstance(g, dict):
             raise ValueError(f"bead_groups[{i}] 非法")
-        shape = str(g.get("shape", "")).strip().lower()
-        if shape not in _SHAPES:
-            raise ValueError(f"bead_groups[{i}].shape 非法: {shape}（须为 {_SHAPES} 之一）")
-        tier = str(g.get("size_tier", "")).strip().lower()
-        if tier not in _TIERS:
-            raise ValueError(f"bead_groups[{i}].size_tier 非法: {tier}（须为 {_TIERS} 之一）")
-        color_family = str(g.get("color_family", "")).strip()
-        if not color_family:
-            raise ValueError(f"bead_groups[{i}].color_family 缺失")
-        traits = str(g.get("material_traits", "")).strip()
-        if not traits:
-            raise ValueError(f"bead_groups[{i}].material_traits 缺失")
+        vi = str(g.get("visual_identity", "")).strip()
+        if not vi:
+            raise ValueError(f"bead_groups[{i}].visual_identity 缺失"
+                             f"（须为自由文本的可见身份描述）")
         rb = g.get("representative_bbox_1000")
         if not (isinstance(rb, (list, tuple)) and len(rb) == 4):
             raise ValueError(f"bead_groups[{i}].representative_bbox_1000 非法: {rb}")
@@ -165,12 +157,11 @@ def validate_analysis(raw, type_count):
         _check_bbox(rb, f"bead_groups[{i}].representative_bbox_1000")
         if not (rb[0] >= bb[0] - 1 and rb[1] >= bb[1] - 1 and
                 rb[2] <= bb[2] + 1 and rb[3] <= bb[3] + 1):
-            raise ValueError(f"bead_groups[{i}] 代表珠必须来自手镯环体"
-                             f"（不得取自包装/散石/背景）")
+            raise ValueError(f"bead_groups[{i}] 代表矩形坐标 sanity check 失败："
+                             f"应落在 bracelet_bbox_1000 内")
         cleaned.append({"group_id": str(g.get("group_id", f"g{i+1}")).strip() or f"g{i+1}",
-                        "label_name": clean_name(g.get("label_name", "")),
-                        "shape": shape, "size_tier": tier,
-                        "color_family": color_family, "material_traits": traits,
+                        "display_name": clean_name(g.get("display_name", "")),
+                        "visual_identity": vi,
                         "representative_bbox_1000": rb})
     return {"bracelet_bbox_1000": bb, "bead_groups": cleaned}
 
@@ -235,14 +226,14 @@ Reference roles:
 
 Bracelet (main subject):
 - One complete bracelet as the clear main subject.
-- Preserve bracelet structure, bead order, bead shapes, size tiers, colors, translucency, inclusions and metal accessories from Image 1.
+- Preserve bracelet structure, bead order, each bead's visible identity (geometry, relative apparent size, color, transparency, inclusions, surface traits) and metal accessories from Image 1.
 - Do not redesign the bracelet; do not add, remove, merge or substitute any bead or metal part.
 
 Representative beads (secondary):
 - Exactly {n} loose beads in the whole image: never more, never fewer.
 - One loose bead per group below; the list order matches the references in Image 2 (indexing convention only).
 {groups}
-- Each loose bead must visibly match its group: same shape (round stays round; square/faceted stays square/faceted), same size tier relative to the bracelet beads, same color family and material traits (opaque stays opaque; translucent stays translucent; inclusions kept).
+- Each loose bead must visibly match its group's visual_identity description: same geometry, same relative apparent size, same color and transparency/opacity, same inclusions and surface traits. Never normalize different groups toward a common shape or size.
 - Each loose bead must look as if the actual bead was removed from the bracelet and set down beside it: approximately the same real-world diameter as its corresponding bracelet bead, with only minor apparent-size variation from perspective. Never enlarge it into a separate hero object; never intentionally shrink it.
 - Their final spatial arrangement is free and should be chosen for the most natural hand-arranged jewelry composition: asymmetry, natural spacing, comfortable negative space; no fixed order, no row, no arc template, no equal spacing.
 - Keep the representative beads secondary to the complete bracelet.
@@ -258,17 +249,17 @@ Text:
 
 NEGATIVE = ("extra bracelet, redesigned bracelet, changed bead type, invented beads, extra loose beads, "
             "missing beads, loose metal accessories, rigid row, grid, mechanical layout, equal spacing, "
-            "arc template, wrong bead shape, square bead rendered round, opaque bead rendered translucent, "
-            "translucent bead rendered opaque, text, "
+            "arc template, changed bead geometry, changed relative bead size, changed transparency or opacity, "
+            "text, "
             "labels, title, watermark, infographic, poster, collage, sticker cutout, white halo, "
             "floating object, fake transparency, plastic texture, CGI, illustration")
 
 
 def _groups_text(groups):
-    """按参考页左→右顺序（仅索引约定）生成逐组身份描述，供 Prompt 绑定身份。"""
+    """按参考页左→右顺序（仅索引约定）绑定身份：只含 group_id + visual_identity，
+    display_name 绝不进入生成 Prompt（猜测的矿名不得干扰生成）。"""
     return "\n".join(
-        f"- Reference {i}: \u300c{g['label_name']}\u300d — {g['shape']} shape, {g['size_tier']} size tier, "
-        f"{g['color_family']}, {g['material_traits']}."
+        f"- Group {g['group_id']} (reference {i} in Image 2): {g['visual_identity']}."
         for i, g in enumerate(groups, 1))
 
 
@@ -369,7 +360,8 @@ def main():
 
     p_run = sub.add_parser("run", help="清理裁剪 → 参考页 → 一次编辑调用 → 候选图")
     p_run.add_argument("--input", required=True)
-    p_run.add_argument("--types", type=int, required=True)
+    p_run.add_argument("--types", type=int, default=None,
+                       help="可选：显式组数；缺省用当前 analysis 的新鲜组数")
     p_run.add_argument("--analysis", required=True)
     p_run.add_argument("--output", required=True)
     p_run.add_argument("--template", default=str(SKILL_DIR / "templates" / "04.jpg"))

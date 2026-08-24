@@ -18,38 +18,43 @@ src_text = (Path(crystal.__file__)).read_text(encoding="utf-8")
 assert "import rembg" not in src_text and "import cv2" not in src_text, "主流水线不得回到 rembg/本地合成"
 print("[ok] 主流水线无 rembg/cv2 依赖")
 
-# 2) analysis 校验：bead_groups 严格 schema + 恰好 N + 代表珠在手镯上
+# 2) analysis 校验：visual_identity 自由文本 schema + 可选 N + display_name 不入生成
 good = {"bracelet_bbox_1000": [200, 200, 800, 800],
         "bead_groups": [
-            {"group_id": "g1", "label_name": "紫水晶", "shape": "round", "size_tier": "medium",
-             "color_family": "purple", "material_traits": "translucent with inclusions",
+            {"group_id": "g1", "display_name": "紫水晶",
+             "visual_identity": "medium round bead, translucent purple with inclusions",
              "representative_bbox_1000": [300, 300, 400, 400]},
-            {"group_id": "g2", "label_name": "白水晶", "shape": "square", "size_tier": "large",
-             "color_family": "clear", "material_traits": "translucent",
+            {"group_id": "g2", "display_name": "白水晶",
+             "visual_identity": "large cube bead, translucent clear",
              "representative_bbox_1000": [500, 300, 600, 400]}]}
-a = crystal.validate_analysis(good, 2)
-assert [g["label_name"] for g in a["bead_groups"]] == ["紫水晶", "白水晶"]
+a = crystal.validate_analysis(good)  # N 缺省：用新鲜组数
+assert len(a["bead_groups"]) == 2
+a2 = crystal.validate_analysis(good, 2)  # 显式 N：强校验
+assert [g["display_name"] for g in a2["bead_groups"]] == ["紫水晶", "白水晶"]
 try:
     crystal.validate_analysis(good, 3)
-    raise SystemExit("FAIL: 种类数校验失效")
+    raise SystemExit("FAIL: 显式 N 组数校验失效")
 except ValueError:
     pass
 import copy  # noqa: E402
-bad_shape = copy.deepcopy(good)
-bad_shape["bead_groups"][0]["shape"] = "triangle"
+bad_vi = copy.deepcopy(good)
+bad_vi["bead_groups"][0]["visual_identity"] = "   "
 try:
-    crystal.validate_analysis(bad_shape, 2)
-    raise SystemExit("FAIL: shape 枚举校验失效")
+    crystal.validate_analysis(bad_vi)
+    raise SystemExit("FAIL: visual_identity 必填校验失效")
 except ValueError:
     pass
 bad_out = copy.deepcopy(good)
-bad_out["bead_groups"][0]["representative_bbox_1000"] = [50, 50, 90, 90]  # 手镯环体外
+bad_out["bead_groups"][0]["representative_bbox_1000"] = [50, 50, 90, 90]  # 坐标 sanity check
 try:
-    crystal.validate_analysis(bad_out, 2)
-    raise SystemExit("FAIL: 代表珠必须来自手镯环体")
+    crystal.validate_analysis(bad_out)
+    raise SystemExit("FAIL: 代表矩形坐标 sanity check 失效")
 except ValueError:
     pass
-print("[ok] validate_analysis bead_groups 严格 schema + 恰好 N + 代表珠在手镯上")
+gt = crystal._groups_text(a["bead_groups"])
+assert "translucent purple" in gt and "紫水晶" not in gt, \
+    "生成绑定仅 group_id+visual_identity，display_name 不得入 Prompt"
+print("[ok] validate_analysis visual_identity 自由文本 + 可选 N + display_name 不入生成")
 
 # 3) bbox_1000 转换与夹紧
 px = crystal.bbox1000_to_pixels([0, 0, 1000, 1000], 1200, 1600)
@@ -105,7 +110,9 @@ assert "indexing convention" in src_text, "左→右仅为身份/索引约定"
 assert "{n}" in src_text, "Prompt 须保持 {n} 参数化"
 assert "qwen-image-2.0-pro" not in src_text, "single-pass：不得有模型回退重试"
 assert "_models" not in src_text, "single-pass：不得有模型列表重试循环"
-assert "bead_groups" in src_text and "size_tier" in src_text, "analysis 须用视觉结构分组 schema"
+assert "visual_identity" in src_text, "analysis 须用 visual_identity 自由文本 schema"
+assert "_SHAPES" not in src_text and "_TIERS" not in src_text, "schema 不得有形状/尺寸枚举"
+assert "size_tier" not in src_text and "color_family" not in src_text, "旧刚性分类字段已移除"
 assert "never more, never fewer" in src_text, "Prompt 须硬约束散珠总数 == N"
 print("[ok] 物理尺度/范围/凭证口径守卫 + single-pass 守卫")
 
