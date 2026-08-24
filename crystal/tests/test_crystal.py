@@ -80,6 +80,8 @@ assert "AUTH_TOKEN" not in src_text, "凭证只允许 DASHSCOPE_API_KEY"
 assert "removed from the bracelet" in src_text, "散珠须同物理尺寸（像从手镯取下）"
 assert "bead #1" not in src_text, "顺序规则不得硬编码 N==3"
 assert "lower side" not in src_text, "构图不得固定下侧弧线"
+assert "left-to-right identity order" not in src_text, "不得要求生成珠保持左/右空间顺序"
+assert "indexing convention" in src_text, "左→右仅为身份/索引约定"
 assert "{n}" in src_text, "Prompt 须保持 {n} 参数化"
 print("[ok] 物理尺度/范围/凭证口径守卫")
 
@@ -97,10 +99,14 @@ assert s1.crop((140, 0, 340, 200)).size == (200, 200), "大珠在参考页仍为
 p2 = crystal.build_bead_sheet(OUT / "t_src.png", crs2, OUT / "t_sheet_s2.png",
                               gap=40, max_width=170)
 s2 = Image.open(p2)
-scale = 170 / (100 + 40 + 200)
-h_small, h_large = max(8, int(round(100 * scale))), max(8, int(round(200 * scale)))
-assert s2.height == h_large, "整页超限时用同一公共因子等比缩小"
-assert abs(h_large / h_small - 2.0) < 0.1, "缩小后相对比例仍须保持"
-print("[ok] 参考页公共比例保留相对尺寸")
+assert s2.width <= 170 and s2.height <= 520, "最终页须实际满足 max_width/max_height"
+scale = (170 - 40) / (100 + 200)  # 间隙不缩放：可用裁剪宽 = max_width - gap*(n-1)
+h_small, h_large = int(100 * scale), int(200 * scale)
+assert s2.height == h_large and abs(h_large / h_small - 2.0) < 0.1, "缩小后相对比例仍须保持"
+p3 = crystal.build_bead_sheet(OUT / "t_src.png", crs2, OUT / "t_sheet_s3.png",
+                              gap=40, max_height=120)
+s3 = Image.open(p3)
+assert s3.width <= 1600 and s3.height <= 120, "高度上限同样须满足"
+print("[ok] 参考页公共比例保留相对尺寸且满足页面上限")
 
 print("\nALL CRYSTAL CHECKS PASSED")

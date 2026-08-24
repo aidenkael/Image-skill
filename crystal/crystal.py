@@ -159,20 +159,22 @@ def build_bead_sheet(input_path, crystals, out_path, gap=40, max_width=1600, max
     """代表珠参考页：同一源图的矩形原始裁剪，左→右按识别顺序。
 
     所有裁剪共用一个缩放因子（仅当整页超限才等比缩小），
-    保留源图中代表珠的相对表观尺寸；页面只加中性间隙，
-    不暗示不同珠类物理尺寸相同。"""
+    间隙为固定中性 padding、不参与缩放；
+    保留源图中代表珠的相对表观尺寸，不暗示不同珠类物理尺寸相同。"""
     im = Image.open(input_path).convert("RGB")
     w, h = im.size
     crops = [im.crop(bbox1000_to_pixels(c["bbox_1000"], w, h))
              for c in crystals]
-    total_w = sum(c.width for c in crops) + gap * (len(crops) - 1)
+    n = len(crops)
+    crop_w = sum(c.width for c in crops)
+    avail_w = max_width - gap * (n - 1)
     max_h = max(c.height for c in crops)
-    scale = min(1.0, max_width / total_w, max_height / max_h)
+    scale = min(1.0, avail_w / crop_w, max_height / max_h)
     scaled = []
     for c in crops:
         if scale < 1.0:
-            c = c.resize((max(8, int(round(c.width * scale))),
-                          max(8, int(round(c.height * scale)))),
+            c = c.resize((max(1, int(c.width * scale)),
+                          max(1, int(c.height * scale))),
                          Image.LANCZOS)
         scaled.append(c)
     sheet_h = max(r.height for r in scaled)
@@ -192,15 +194,18 @@ EDIT_PROMPT = """Create a photorealistic jewelry reference photo, as if carefull
 
 Reference roles:
 - Image 1 is the only source of truth for the bracelet.
-- Image 2 contains exactly {n} representative crops in left-to-right order.
+- Image 2 is the representative bead reference sheet; its left-to-right order is only an identity/indexing convention.
 - Image 3 is only the empty scene/background reference.
 
 Composition:
 - One complete bracelet as the main subject, placed naturally in the scene.
 - Preserve bracelet structure, bead colors, translucency, inclusions, shapes, relative sizes and metal accessories from Image 1.
 - Do not redesign the bracelet; do not add or remove components; do not invent bead types or shapes.
-- Generate exactly {n} loose representative beads, one per crop in Image 2. Not more, not fewer.
-- Preserve one-to-one correspondence and the same left-to-right identity order for all {n} items. Never duplicate, omit, swap, or substitute any representative type.
+- Image 2 contains exactly {n} distinct representative bead references.
+- Generate each representative type exactly once.
+- Preserve one-to-one identity correspondence with Image 2.
+- Never duplicate, omit, merge, or substitute a representative type.
+- Their final spatial arrangement is free and should be chosen for the most natural hand-arranged jewelry composition; no reference is tied to a particular left/right position.
 - Each loose bead must look as if the actual bead was removed from the bracelet and set down beside it: approximately the same real-world diameter as its corresponding bracelet bead, with only minor apparent-size variation from perspective. Never enlarge it into a separate hero object; never intentionally shrink it.
 - Place the representative beads naturally near the bracelet, as if deliberately arranged by a human jewelry photographer: use asymmetry and natural spacing when appropriate, preserve comfortable negative space, and keep the representative beads secondary to the complete bracelet.
 - Avoid rigid row/grid/equal-spacing/template-like placement.
