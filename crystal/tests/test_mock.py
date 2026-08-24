@@ -1,92 +1,106 @@
-"""Mock 验证（无需 API 凭证）：scenes.yaml 解析 / type_count 强校验 / 合成流程。"""
+"""Mock 验证（零网络）：场景配置 / 分析校验 / bbox 转换 / rembg 会话复用 / 本地合成。"""
+import os
 import sys
+import types
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_DIR))
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw  # noqa: E402
 
-import image_ops
-import vision
+import image_ops  # noqa: E402
 
-# 1) scenes.yaml 解析 + 6 场景必需字段
+# 1) 场景配置：6 场景、必需字段、3:4 画布、底图存在且为 3:4
 cfg = image_ops.load_scenes()
-assert cfg["canvas"] == {"width": 1600, "height": 1200}
-required = {"background", "bracelet_box", "sample_column", "label_column",
+assert (cfg["canvas"]["width"], cfg["canvas"]["height"]) == (1200, 1600)
+required = {"background", "bracelet_box", "bead_row", "label_row",
             "shadow", "rotation_range", "scale_range"}
-assert len(cfg["scenes"]) == 6, "必须恰好 6 个场景"
+assert len(cfg["scenes"]) == 6
 for key, sc in cfg["scenes"].items():
-    missing = required - set(sc)
-    assert not missing, f"场景 {key} 缺少字段: {missing}"
-    assert (SKILL_DIR / sc["background"]).exists(), f"缺底图: {sc['background']}"
-print("[ok] scenes.yaml 解析，6 场景字段齐全，底图均存在")
+    assert not (required - set(sc)), f"场景 {key} 缺字段"
+    bg = Image.open(SKILL_DIR / sc["background"])
+    assert bg.size == (1200, 1600), f"场景 {key} 底图尺寸 {bg.size}"
+print("[ok] 6 场景字段齐全，底图均为 1200x1600 (3:4)")
 
-# 2) choose_scene
-for s in ("auto", "1", "6"):
-    k, _ = image_ops.choose_scene(s, cfg)
-    assert k in cfg["scenes"]
+# 2) choose_scene：显式确定 / auto 随机 / 非法报错
+assert image_ops.choose_scene("3", cfg)[0] == "03"
+assert image_ops.choose_scene("6", cfg)[0] == "06"
+assert image_ops.choose_scene("auto", cfg)[0] in cfg["scenes"]
 try:
     image_ops.choose_scene("9", cfg)
-    raise AssertionError("不存在的场景应报错")
+    raise AssertionError
 except ValueError:
     pass
-print("[ok] choose_scene: auto/1/6 正常，非法场景报错")
+print("[ok] choose_scene: 1-6 确定、auto 随机、非法报错")
 
-# 3) identify 响应强校验：种类数必须恰好等于 type_count
-ok_text = '''```json
-{"bracelet_bbox": [10, 20, 400, 380], "view": "top_down", "crystals": [
- {"name": "疑似紫水晶", "point": [100, 100], "radius": 30, "shape": "round", "confidence": 0.0},
- {"name": "可能白水晶", "point": [200, 120], "radius": 28, "shape": "faceted", "confidence": 0.0},
- {"name": "青金石", "point": [300, 150], "radius": 26, "shape": "round", "confidence": 1.0}]}
-```'''
-parsed = vision.parse_identify_response(ok_text, 3, image_size=(450, 444))
-assert len(parsed["crystals"]) == 3
-assert parsed["crystals"][0]["name"] == "紫水晶"   # 不确定措辞被剥离
-assert parsed["crystals"][1]["name"] == "白水晶"
-assert parsed["crystals"][0]["confidence"] == 0.0  # 置信度保留在内部
-for c in parsed["crystals"]:
-    assert not any(w in c["name"] for w in ("疑似", "可能", "大概", "或许"))
+# 3) bbox_1000 → 像素转换
+px = image_ops.bbox1000_to_pixels([500, 500, 600, 600], 450, 444)
+assert px == [225, 222, 270, 266], px
 try:
-    vision.parse_identify_response(ok_text, 2, image_size=(450, 444))
-    raise AssertionError("种类数不符应报错")
+    image_ops.bbox1000_to_pixels([0, 0, 1001, 500], 100, 100)
+    raise AssertionError
+except ValueError:
+    pass
+print("[ok] bbox_1000 转换与越界校验")
+
+# 4) validate_analysis：恰好 N、去不确定措辞、confidence 保留内部
+analysis = {
+    "bracelet_bbox_1000": [100, 100, 900, 900],
+    "crystals": [
+        {"name": "疑似紫水晶", "bbox_1000": [100, 100, 300, 300], "shape": "round", "confidence": 0.4},
+        {"name": "可能白水晶", "bbox_1000": [400, 100, 600, 300], "shape": "faceted"},
+        {"name": "青金石", "bbox_1000": [700, 100, 900, 300], "shape": "round"},
+    ],
+}
+clean = image_ops.validate_analysis(analysis, 3)
+assert [c["name"] for c in clean["crystals"]] == ["紫水晶", "白水晶", "青金石"]
+assert clean["crystals"][0]["confidence"] == 0.4
+try:
+    image_ops.validate_analysis(analysis, 2)
+    raise AssertionError
 except ValueError as e:
     assert "种类数" in str(e)
-try:
-    vision.parse_identify_response("没有JSON", 3)
-    raise AssertionError("无 JSON 应报错")
-except ValueError:
-    pass
-print("[ok] identify 响应校验：type_count 强约束 + 名称去不确定措辞")
+print("[ok] validate_analysis: 恰好 N 强校验 + 名称清洗")
 
-# 4) compose：mock 手镯与 3 颗珠子（无需 API、无需 rembg）
+# 5) rembg 会话：惰性创建、全局复用、默认 u2net、可覆盖（fake 模块，零下载）
+fake = types.ModuleType("rembg")
+created = []
+fake.new_session = lambda name: created.append(name) or f"session<{name}>"
+fake.remove = lambda img, session=None: img
+sys.modules["rembg"] = fake
+os.environ.pop("CRYSTAL_REMBG_MODEL", None)
+image_ops._REMBG_SESSION = None
+s1 = image_ops._get_rembg_session()
+s2 = image_ops._get_rembg_session()
+assert s1 is s2 and created == ["u2net"], created
+os.environ["CRYSTAL_REMBG_MODEL"] = "isnet-general-use"
+image_ops._REMBG_SESSION = None
+image_ops._get_rembg_session()
+assert created[-1] == "isnet-general-use"
+os.environ.pop("CRYSTAL_REMBG_MODEL", None)
+print("[ok] rembg 会话惰性复用：默认 u2net，CRYSTAL_REMBG_MODEL 可覆盖")
+
+# 6) 本地完整合成（fake rembg + mock 珠子/手镯）：恰好 N 个标签
 def mock_ring(size=520, thickness=90, color=(150, 90, 200)):
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((20, 20, size - 20, size - 20), outline=color + (255,), width=thickness)
+    ImageDraw.Draw(img).ellipse((20, 20, size - 20, size - 20),
+                                outline=color + (255,), width=thickness)
     return img
 
 def mock_bead(size=140, color=(90, 160, 220)):
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((6, 6, size - 6, size - 6), fill=color + (255,))
+    ImageDraw.Draw(img).ellipse((6, 6, size - 6, size - 6), fill=color + (255,))
     return img
 
-analysis = {"bracelet_bbox": [0, 0, 100, 100], "view": "top_down", "crystals": []}
 samples = [{"name": n, "image": mock_bead(color=c)} for n, c in
            [("紫水晶", (150, 90, 200)), ("白水晶", (235, 235, 240)), ("青金石", (40, 70, 160))]]
 out = SKILL_DIR / "tests" / "outputs" / "mock_compose.jpg"
-out.parent.mkdir(parents=True, exist_ok=True)
-for scene_arg in ("1", "5"):
+for scene_arg in ("1", "4"):
     key, sc = image_ops.choose_scene(scene_arg, cfg)
-    image_ops.compose("mock", mock_ring(), samples, analysis, key, sc, out, config=cfg)
-    assert out.exists() and out.stat().st_size > 10000
-print(f"[ok] compose 成功（场景1与场景5各一次）: {out}")
-
-# 5) extract_bead 几何兜底路径（不调 rembg：直接验证 _shape_fallback_mask）
-for shape in ("round", "square", "faceted", "irregular"):
-    m = image_ops._shape_fallback_mask((120, 120), 40, shape)
-    assert m.max() == 255 and (m > 0).sum() > 1000
-print("[ok] 各形状几何掩码兜底可用")
+    image_ops.compose(mock_ring(), samples, key, sc, out, config=cfg)
+    with Image.open(out) as im:
+        assert im.size == (1200, 1600), im.size
+print(f"[ok] compose 输出 3:4 成品图（场景1/4）: {out}")
 
 print("\nALL MOCK CHECKS PASSED")

@@ -1,7 +1,6 @@
-# crystal 技能最小依赖（Qwen 调用沿用仓库既有 requests 直连方式，无需额外 SDK）
+# crystal 技能最小本地依赖（零网络/API 运行时；rembg 模型仅首次缓存到用户目录）
 rembg
 onnxruntime
 opencv-python-headless
 Pillow
 PyYAML
-requests

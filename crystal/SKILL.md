@@ -1,80 +1,85 @@
 ---
 name: crystal
-description: '水晶手镯识别展示图生成（本地合成，0 次生图 API）。输入一张手镯图 + 珠子种类数 N → Qwen 视觉识别恰好 N 种水晶（忽略金属件）→ 本地提取原始手镯与每类一颗代表珠 → 固定实拍场景合成 + 中文名标签 + 接触阴影 → Qwen 视觉 QA。Use when the user says "识别水晶", "识别珠子", "水晶标注图", "珠子种类展示", "这条有几种珠子", "crystal bracelet", "crystal identification image" — i.e. any request to identify crystal types in a bracelet photo and produce a labeled showcase image.'
+description: '水晶手镯识别展示图（Agent-native，本地合成，0 API 调用）。Agent 自身多模态识别恰好 N 种水晶（忽略金属件）并写出归一化分析 JSON → 本地 crystal.py 用 rembg 提取原始手镯与每类一颗代表珠 → 6 个固定实拍场景之一合成 + 中文名标签 + 接触阴影 → Agent 独立视觉 QA。Use when the user says "识别水晶", "识别珠子", "水晶标注图", "珠子种类展示", "这条有几种珠子", "crystal bracelet", "crystal identification image" — i.e. any request to identify crystal types in a bracelet photo and produce a labeled showcase image.'
 license: MIT
 metadata:
   author: image-skill
-  source: thin orchestration ideas from ecom-shot (fidelity + QA principles); extraction via rembg; geometry/compositing via OpenCV + Pillow
+  source: thin orchestration ideas from ecom-shot (fidelity + QA principles); extraction via rembg (u2net); geometry/compositing via OpenCV + Pillow
   skill_id: crystal
-  version: "1.0"
+  version: "2.0"
 ---
 
-# crystal（水晶手镯识别展示图 · 本地合成）
+# crystal（水晶手镯识别展示图 · Agent-native 本地合成）
 
-输入一张手镯照片 + 种类数，产出一张"原始手镯 + 每类水晶一颗代表珠 + 中文名标签"的实拍风格展示图。**不重绘、不重建商品**：手镯与珠子像素 100% 来自原图；运行时 0 次图像生成 API，恰好 2 次 Qwen 视觉调用（识别 + QA）。
+输入一张手镯照片 + 种类数 N，产出一张 3:4 展示图：原始手镯 + 每类水晶一颗代表珠 + 中文名标签。**识别与 QA 由执行本技能的多模态 Agent 自身完成**；本地 Python 只做像素提取与合成，全程零网络/API 调用，手镯与珠子像素 100% 来自原图。
 
 **边界（MUST）**：
-- 不调用任何生图/修图 API（禁止 Qwen Image / Qwen Image Edit）。
-- 只识别水晶珠子；金属件（隔珠/吊坠/搭扣）一律不识别、不标注。
-- 标签只写中文水晶市场名，不写标题、营销文案、水印、置信度、"疑似/可能"等措辞。
-- API Key 只从 `.env` 的 `DASHSCOPE_API_KEY` 读取，不暴露、不回显。
+- 本地代码不调用任何模型 API（无生图、无视觉 HTTP 层）。
+- 只识别水晶珠子；金属件（隔珠/吊坠/搭扣/转运珠金属件）一律不识别、不标注。
+- 标签只写中文水晶市场名；不写标题、营销文案、水印、置信度、"疑似/可能"等措辞。
+- 场景固定 6 个（批准实拍资产），Agent 不得新建/生成背景。
 
-## Agent 交互
-
-输入：参考图（必需）、type_count（必需）、场景（可选，默认 auto）。
-
-- 用户只给了图 → **只问种类数**，例如："这条手链有几种水晶？"
-- 不要向用户询问水晶名称；名称由 Qwen 视觉识别。
-- 典型对话："这条有3种珠子，生成识别展示图" → 直接执行。
-
-## 执行流程
+## Agent 工作流（严格执行）
 
 ```
-crystal(reference_image, type_count, scene="auto") → image, qa_report
-
-# Step 1 — 运行 CLI（仓库根目录执行）
-python crystal/crystal.py \
-  --input <用户图片路径> \
-  --types <type_count> \
-  --output crystal/tests/outputs/result.jpg \
-  --scene auto        # 或 1-6 指定场景
-
-# Step 2 — 读取结果
-- 退出码 0：成功，把输出图片交给用户，并列出识别出的中文名
-- 退出码 2：QA 未通过。图片已保存，向用户展示图片 + QA 问题清单，
-  请用户确认；不自动重试、不自动重生成
-- 退出码 1：输入错误（图片不存在 / 参数非法），提示用户修正
-
-# Step 3 — 识别失败处理
-仅当 Qwen 无法给出名称（返回"未知水晶"）时，才向用户确认该珠子名称；
-否则不问。
+source image + type_count（缺 type_count 时只问这一个值）
+→ Agent 视觉识别恰好 N 种水晶（中文市场名；图像是唯一事实来源；
+  光照/反光差异不算不同种类；不确定时给最佳市场名，confidence 仅内部）
+→ Agent 为每类独立选一颗最清晰代表珠，给出 bbox_1000（0..1000 归一化）
+  与 shape（round/square/faceted/irregular），并给 bracelet_bbox_1000
+→ Agent 写临时分析 JSON（如 crystal/tests/outputs/analysis.json）
+→ 运行本地合成：
+    python crystal/crystal.py --input <图> --types N \
+        --analysis <json> --output <result.jpg> --scene auto
+→ Agent 视觉对比 SOURCE 与 RESULT，独立复检：
+  水晶命名（重新评估，不得把第一轮名称当 ground truth）、代表珠选择、
+  手镯完整性、标签文字、构图自然度
+→ 若明显错误：修正分析 JSON，本地重跑合成一次（最多一次）
+→ 返回成品图（附识别名称清单；如重跑后仍有问题，如实说明）
 ```
 
-## 场景表（6 个固定场景）
+## 分析 JSON 约定
+
+```json
+{
+  "bracelet_bbox_1000": [x1, y1, x2, y2],
+  "crystals": [
+    {
+      "name": "紫水晶",
+      "bbox_1000": [x1, y1, x2, y2],
+      "shape": "round",
+      "confidence": 0.92
+    }
+  ]
+}
+```
+
+- `crystals` 恰好 N 项；坐标 0..1000；`confidence` 仅内部、永不渲染。
+- crystal.py 强校验：种类数不符 / 坐标越界 → 退出码 1 并报错。
+
+## 场景表（6 个固定场景，--scene 1-6 确定，auto 随机）
 
 | --scene | 场景 |
 |---|---|
 | 1 | 米色亚麻珠宝托盘 |
-| 2 | 深色丝绒珠宝托盘 |
-| 3 | 浅木桌面 + 亚麻布 |
-| 4 | 中性石材 + 象牙白展示台 |
+| 2 | 黑色丝绒珠宝托盘 |
+| 3 | 浅木桌面 + 亚麻托盘 |
+| 4 | 中性石材 + 陶瓷圆盘 |
 | 5 | 深色木纹 + 暖色侧光 |
-| 6 | 浅灰织物 / 陶瓷展示面 |
-| auto | 随机挑选（默认） |
+| 6 | 浅灰亚麻 + 陶瓷圆盘 |
 
 ## 文件
 
 | 文件 | 内容 |
 |---|---|
-| `crystal.py` | 唯一 CLI 入口 |
-| `vision.py` | Qwen 视觉：identify() / qa() |
-| `image_ops.py` | rembg 提取、场景选择、OpenCV/Pillow 合成 |
-| `scenes.yaml` | 6 个固定场景布局配置 |
-| `templates/0X.jpg` | 场景底图（可直接替换为实拍图，无需改代码） |
-| `make_templates.py` | 底图确定性生成脚本（可重跑） |
+| `crystal.py` | 唯一 CLI 入口（纯本地） |
+| `image_ops.py` | 分析校验 / bbox 转换 / rembg 提取（u2net 会话复用）/ 合成 |
+| `scenes.yaml` | 6 场景 3:4 布局配置 |
+| `templates/0X.jpg` | 批准的实拍场景资产（1200x1600，可同名替换） |
+| `tests/test_mock.py` | 零网络 mock 验证 |
 
 ## 保真与 QA 原则（沿用 ecom-shot 思路）
 
-- 图片是唯一商品事实来源：不描述、不生成参考图不存在的结构。
+- 图像是唯一商品事实来源：不描述、不生成原图不存在的结构。
 - 代表珠必须使用原图像素；合成只做摆放、接触阴影与标签。
-- 成图后必须与原图对照做视觉 QA；QA 失败如实报告，不盲目重试。
+- 第二轮视觉 QA 必须独立重新评估命名与选珠，不自我印证第一轮结果。

@@ -1,116 +1,121 @@
-# crystal 技能 — 6 个固定实拍风格场景
-# 画布固定 1600x1200；模板图可直接替换同名 jpg，无需改代码。
-# 布局字段含义：
-#   bracelet_box   手镯摆放区 [x1, y1, x2, y2]
-#   sample_column  右侧代表珠列（x 为中心线，y_start 为首颗中心，gap 为间距）
-#   label_column   中文名称文字起点（x）
-#   shadow         接触阴影（偏移/模糊/不透明度）
-#   rotation_range 手镯轻微随机旋转角度范围（度，保持俯拍视角合理性）
-#   scale_range    手镯轻微随机缩放范围
+# crystal 技能 — 6 个固定实拍场景（批准资产，禁止程序化生成/替换式重绘）
+# 画布固定 1200x1600（3:4 竖幅）。模板图可直接替换同名 jpg（保持 3:4），无需改代码。
+# 布局字段：
+#   bracelet_box  手镯摆放区 [x1, y1, x2, y2]
+#   bead_row      代表珠横排（y 为中心线，x_start/x_end 为分布范围，size 为最大直径）
+#   label_row     中文名称基线 y（位于每颗珠子正下方，水平居中）
+#   shadow        接触阴影（偏移/模糊/不透明度）
+#   rotation_range / scale_range  手镯轻微随机摆放范围
 
 canvas:
-  width: 1600
-  height: 1200
+  width: 1200
+  height: 1600
 
 scenes:
   "01":
     name: "米色亚麻珠宝托盘"
     background: "templates/01.jpg"
-    bracelet_box: [80, 140, 880, 1040]
-    sample_column:
-      x: 1060
-      y_start: 280
-      gap: 230
-    label_column:
-      x: 1240
+    bracelet_box: [190, 400, 840, 1120]
+    bead_row:
+      y: 1420
+      x_start: 170
+      x_end: 1030
+      size: 150
+    label_row:
+      y: 1540
     shadow:
-      offset: [8, 12]
-      blur: 18
-      opacity: 0.22
+      offset: [6, 10]
+      blur: 16
+      opacity: 0.25
     rotation_range: [-4, 4]
     scale_range: [0.96, 1.04]
 
   "02":
-    name: "深色丝绒珠宝托盘"
+    name: "黑色丝绒珠宝托盘"
     background: "templates/02.jpg"
-    bracelet_box: [90, 150, 890, 1050]
-    sample_column:
-      x: 1070
-      y_start: 270
-      gap: 230
-    label_column:
-      x: 1250
+    bracelet_box: [220, 430, 980, 1160]
+    bead_row:
+      y: 1425
+      x_start: 160
+      x_end: 860
+      size: 140
+    label_row:
+      y: 1545
     shadow:
-      offset: [6, 10]
-      blur: 22
-      opacity: 0.30
+      offset: [5, 9]
+      blur: 18
+      opacity: 0.32
     rotation_range: [-4, 4]
     scale_range: [0.96, 1.04]
 
   "03":
-    name: "浅木桌面 + 亚麻布"
+    name: "浅木桌面 + 亚麻托盘"
     background: "templates/03.jpg"
-    bracelet_box: [70, 130, 870, 1030]
-    sample_column:
-      x: 1055
-      y_start: 285
-      gap: 228
-    label_column:
-      x: 1235
-    shadow:
-      offset: [10, 14]
-      blur: 16
-      opacity: 0.20
-    rotation_range: [-5, 5]
-    scale_range: [0.95, 1.05]
-
-  "04":
-    name: "中性石材 + 象牙白展示台"
-    background: "templates/04.jpg"
-    bracelet_box: [85, 145, 885, 1045]
-    sample_column:
-      x: 1065
-      y_start: 275
-      gap: 232
-    label_column:
-      x: 1245
+    bracelet_box: [230, 480, 970, 1200]
+    bead_row:
+      y: 1425
+      x_start: 170
+      x_end: 950
+      size: 140
+    label_row:
+      y: 1545
     shadow:
       offset: [7, 11]
-      blur: 18
+      blur: 16
       opacity: 0.20
+    rotation_range: [-4, 4]
+    scale_range: [0.96, 1.04]
+
+  "04":
+    name: "中性石材 + 陶瓷圆盘"
+    background: "templates/04.jpg"
+    bracelet_box: [280, 460, 920, 1100]
+    bead_row:
+      y: 1420
+      x_start: 170
+      x_end: 1030
+      size: 150
+    label_row:
+      y: 1540
+    shadow:
+      offset: [6, 10]
+      blur: 16
+      opacity: 0.22
     rotation_range: [-4, 4]
     scale_range: [0.96, 1.04]
 
   "05":
     name: "深色木纹 + 暖色侧光"
     background: "templates/05.jpg"
-    bracelet_box: [95, 155, 895, 1055]
-    sample_column:
-      x: 1072
-      y_start: 268
-      gap: 230
-    label_column:
-      x: 1252
+    bracelet_box: [220, 420, 980, 1150]
+    bead_row:
+      y: 1410
+      x_start: 160
+      x_end: 880
+      size: 150
+    label_row:
+      y: 1530
     shadow:
-      offset: [14, 10]
-      blur: 20
-      opacity: 0.28
+      offset: [10, 8]
+      blur: 18
+      opacity: 0.30
     rotation_range: [-3, 3]
     scale_range: [0.96, 1.04]
 
   "06":
-    name: "浅灰织物 / 陶瓷展示面"
+    name: "浅灰亚麻 + 陶瓷圆盘"
     background: "templates/06.jpg"
-    bracelet_box: [78, 138, 878, 1038]
-    sample_column:
-      x: 1058
-      y_start: 282
-      gap: 226
-    label_column:
-      x: 1238
+    bracelet_box: [280, 440, 920, 1080]
+    bead_row:
+      y: 1420
+      x_start: 160
+      x_end: 880
+      size: 150
+    label_row:
+      y: 1540
     shadow:
-      offset: [8, 12]
-      blur: 18
+      offset: [6, 10]
+      blur: 16
       opacity: 0.18
     rotation_range: [-4, 4]
     scale_range: [0.96, 1.04]
