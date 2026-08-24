@@ -11,7 +11,7 @@ description: 水晶手镯参考图——清理裁剪 + Agent 识别 + 干净 bas
 
 ```
 fresh analysis
-→ base: 1 Wan call
+→ base: 1 Qwen call（qwen-image-3.0-pro）
 → mandatory base QA gate
 → Agent writes placements once
 → N independent Wan local edits, all against the same clean base
@@ -56,7 +56,8 @@ contact sheet、生成重试/候选对比/回退模型。
    - 名称必须提供最终中文市场名，空白或含"疑似/可能"等不确定措辞会被显式拒绝（代码抛错，不静默兜底）。
 3. **base 阶段**：`python crystal/crystal.py base --input 原图 --analysis analysis.json --output base.png --workdir work`
    （内部：新鲜 analysis 校验 → 清理裁剪 → 每组紧裁剪单组件代表资产留存 workdir
-   → 恰好一次干净场景生成调用；base 图只有完整手镯与空场景，**不生成任何散珠/道具**，不传任何代表资产）。
+   → 恰好一次 `qwen-image-3.0-pro` 干净场景生成调用（prompt_extend=False + 重复/缺失/替换组件负向守卫）；
+   base 图只有完整手镯与空场景，**不生成任何散珠/道具**，不传任何代表资产）。
 4. **强制 base QA 门**（写 placements 之前必须目视 base 图）：
    PASS 要求 = 恰好一条完整手镯、无散珠、无散石、无散珍珠、无多余金属件、无文字、无虚构道具、
    手镯保真可接受。**FAIL 则立即停止：不写 placements、不跑 compose、不消耗 N 次编辑调用，如实报告 base 失败。**
@@ -110,13 +111,14 @@ contact sheet、生成重试/候选对比/回退模型。
 ## 凭证与模型
 
 - 凭证仅经 `.env`/环境变量 `DASHSCOPE_API_KEY`，无其他凭证回退；
-- Crystal 图像模型：`CRYSTAL_IMAGE_MODEL` 可覆盖，默认 `wan2.7-image-pro`；不使用 `QWEN_EDIT_MODEL`
-  （那是 ecom-shot 的配置，与 Crystal 无关）；
+- 双模型分工：base 场景 = `CRYSTAL_BASE_MODEL`（默认 `qwen-image-3.0-pro`，prompt_extend=False，
+  带 BASE_NEGATIVE 负向守卫）；代表件独立局部编辑 = `CRYSTAL_IMAGE_MODEL`（默认 `wan2.7-image-pro`，
+  不传 prompt_extend）；不使用 `QWEN_EDIT_MODEL`（那是 ecom-shot 的配置，与 Crystal 无关）；
 - planned multi-stage, zero-retry：阶段失败即失败（退出码 2），无生成重试、无候选对比、无回退模型；
   base 失败在 compose 之前停止；
 - 端点：`DASHSCOPE_API_URL` 优先；否则 key 以 `sk-sp-` 开头用 Token Plan 端点（见根 `.env.example`）；
   非 Token Plan 凭证且未显式配置 `DASHSCOPE_API_URL` 时直接失败（拒绝猜测 Wan workspace 端点）；
-- wan2.7-image-pro 不传 `prompt_extend`；base `size` 保持 3:4（`1200*1600`）。
+- base `size` 保持 3:4（`1200*1600`）。
 
 ## 资产
 

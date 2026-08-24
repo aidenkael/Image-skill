@@ -10,7 +10,7 @@ Pillow 羽毛合并仅合并被编辑的局部区域，小字楷体中文注记�
 
 ```
 fresh analysis
-→ base: 1 Wan call（完整手镯 + 空场景，不生成任何散珠/道具）
+→ base: 1 Qwen call（qwen-image-3.0-pro；完整手镯 + 空场景，不生成任何散珠/道具）
 → mandatory base QA gate（FAIL 则停止，不跑 compose）
 → Agent writes placements once（每组恰好一个摆放框）
 → N independent Wan local edits, all against the same clean base
@@ -36,7 +36,8 @@ pip install -r crystal/requirements.txt
 凭证经 `.env`/环境变量（不硬编码）：仅 `DASHSCOPE_API_KEY`，无其他回退；
 端点解析：`DASHSCOPE_API_URL` 优先，`sk-sp-` key 走 Token Plan 端点（见根 `.env.example`），
 非 Token Plan 凭证且未配置 `DASHSCOPE_API_URL` 时直接失败（不猜测 Wan workspace 端点）；
-Crystal 图像模型：`CRYSTAL_IMAGE_MODEL`（默认 `wan2.7-image-pro`；失败即失败，不回退重试；
+Crystal 双模型分工：base 场景 = `CRYSTAL_BASE_MODEL`（默认 `qwen-image-3.0-pro`）；
+代表件独立局部编辑 = `CRYSTAL_IMAGE_MODEL`（默认 `wan2.7-image-pro`）；失败即失败，不回退重试；
 不使用 `QWEN_EDIT_MODEL`，那是 ecom-shot 的配置）。
 
 ## 用法

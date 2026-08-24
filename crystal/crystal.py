@@ -10,7 +10,8 @@
     → Agent 视觉 QA → 本地 Pillow 编辑式标注 → 成品图
 
 凭证仅从环境变量 DASHSCOPE_API_KEY（.env）读取，代码不硬编码密钥，无其他凭证回退；
-Crystal 图像模型用 CRYSTAL_IMAGE_MODEL（默认 wan2.7-image-pro），端点可用 DASHSCOPE_API_URL 替换。
+双模型分工：base 场景用 CRYSTAL_BASE_MODEL（默认 qwen-image-3.0-pro），
+代表件独立局部编辑用 CRYSTAL_IMAGE_MODEL（默认 wan2.7-image-pro）；端点可用 DASHSCOPE_API_URL 替换。
 
 用法:
     python crystal/crystal.py base \
@@ -308,9 +309,14 @@ def build_representative_assets(
 # ---------------------------------------------------------------- 编辑调用
 
 def _image_model():
-    """Crystal 专用图像编辑模型：CRYSTAL_IMAGE_MODEL 可覆盖，默认 wan2.7-image-pro。
+    """Crystal 代表件局部编辑模型：CRYSTAL_IMAGE_MODEL 可覆盖，默认 wan2.7-image-pro。
     Crystal 不使用 ecom-shot 的编辑模型配置变量。"""
     return os.environ.get("CRYSTAL_IMAGE_MODEL", "wan2.7-image-pro")
+
+
+def _base_model():
+    """Crystal 基础场景模型：CRYSTAL_BASE_MODEL 可覆盖，默认 qwen-image-3.0-pro。"""
+    return os.environ.get("CRYSTAL_BASE_MODEL", "qwen-image-3.0-pro")
 
 
 BASE_PROMPT = """Create one photorealistic commercial/editorial jewelry photograph.
@@ -379,8 +385,17 @@ def _b64url(p: Path) -> str:
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
 
 
-def _call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
-    """共享的 wan2.7-image-pro 调用：基础场景生成与独立局部编辑共用。
+def _call_image_model(
+    model,
+    images,
+    prompt,
+    output_path,
+    size="1200*1600",
+    bbox_list=None,
+    prompt_extend=None,
+    negative_prompt=None,
+):
+    """唯一网络 helper：显式模型参数的图像调用（base 与独立局部编辑共用）。
 
     规划式多阶段、零重试：失败即抛错，不重试、不换模型、不回退。"""
     token = _token()
@@ -395,13 +410,20 @@ def _call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
         "size": size,
         "watermark": False,
     }
+
     if bbox_list is not None:
         if len(bbox_list) != len(images):
             raise ValueError("bbox_list 长度必须与输入图片数量一致")
         parameters["bbox_list"] = bbox_list
 
+    if prompt_extend is not None:
+        parameters["prompt_extend"] = prompt_extend
+
+    if negative_prompt:
+        parameters["negative_prompt"] = negative_prompt
+
     payload = {
-        "model": _image_model(),
+        "model": model,
         "input": {
             "messages": [{
                 "role": "user",
@@ -420,10 +442,10 @@ def _call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
         json=payload,
         timeout=600,
     )
+
     if resp.status_code != 200:
         raise RuntimeError(
-            f"图像调用失败: {_image_model()} HTTP {resp.status_code}: "
-            f"{resp.text[:200]}"
+            f"图像调用失败: {model} HTTP {resp.status_code}: {resp.text[:200]}"
         )
 
     data = resp.json()
@@ -441,7 +463,7 @@ def _call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
             url = None
 
     if not url:
-        raise RuntimeError("图像调用失败：响应无图片")
+        raise RuntimeError(f"图像调用失败: {model} 响应无图片")
 
     img = requests.get(url, timeout=120)
     img.raise_for_status()
@@ -460,14 +482,25 @@ def _call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
     return output_path
 
 
+BASE_NEGATIVE = (
+    "duplicate bead, duplicated component, missing bead, "
+    "replaced component, changed bead shape, changed bead count, "
+    "extra loose bead, loose stone, loose pearl, spare metal part, "
+    "text, label, logo, watermark"
+)
+
+
 def generate_base_scene(clean_src, template, output_path, size="1200*1600"):
-    """基础场景：完整手镯 + 空场景模板，不生成任何散珠；恰好一次调用，
-    不传任何代表件参考图。"""
-    return _call_wan(
+    """基础场景：qwen-image-3.0-pro；完整手镯 + 空场景模板，不生成任何散珠；
+    恰好一次调用，不传任何代表件参考图。"""
+    return _call_image_model(
+        _base_model(),
         [clean_src, template],
         BASE_PROMPT,
         output_path,
         size=size,
+        prompt_extend=False,
+        negative_prompt=BASE_NEGATIVE,
     )
 
 
@@ -492,7 +525,8 @@ def generate_representative_edit(
         visual_identity=representative_asset["visual_identity"]
     )
 
-    return _call_wan(
+    return _call_image_model(
+        _image_model(),
         [
             representative_asset["path"],
             base_path,
@@ -727,7 +761,7 @@ def main():
         except Exception as e:
             print(f"ERROR: {e}")
             return 2
-        print(f"model_used: {_image_model()}")
+        print(f"base_model: {_base_model()}")
         print(f"base: {args.output}")
         return 0
 
@@ -752,7 +786,7 @@ def main():
         except Exception as e:
             print(f"ERROR: {e}")
             return 2
-        print(f"model_used: {_image_model()}")
+        print(f"insert_model: {_image_model()}")
         print(f"independent_edit_calls: {len(placements)}")
         print(f"candidate: {args.output}")
         return 0

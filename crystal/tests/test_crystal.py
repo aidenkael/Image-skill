@@ -168,27 +168,32 @@ except ValueError:
     pass
 print("[ok] validate_placements 结构校验（数量/缺失/重复/越界/反向零面积/排序）")
 
-# 7) Crystal 默认图像模型 wan2.7-image-pro；QWEN_EDIT_MODEL 不控制 Crystal
-saved_env = {k: os.environ.get(k) for k in ("CRYSTAL_IMAGE_MODEL", "QWEN_EDIT_MODEL")}
+# 7) 双模型分工：base=qwen-image-3.0-pro，插入=wan2.7-image-pro；QWEN_EDIT_MODEL 不控制 Crystal
+saved_env = {k: os.environ.get(k) for k in ("CRYSTAL_IMAGE_MODEL", "CRYSTAL_BASE_MODEL", "QWEN_EDIT_MODEL")}
 try:
     os.environ.pop("CRYSTAL_IMAGE_MODEL", None)
+    os.environ.pop("CRYSTAL_BASE_MODEL", None)
     os.environ.pop("QWEN_EDIT_MODEL", None)
-    assert crystal._image_model() == "wan2.7-image-pro", "默认模型必须是 wan2.7-image-pro"
-    os.environ["QWEN_EDIT_MODEL"] = "qwen-image-3.0-pro"
+    assert crystal._image_model() == "wan2.7-image-pro", "插入默认模型必须是 wan2.7-image-pro"
+    assert crystal._base_model() == "qwen-image-3.0-pro", "base 默认模型必须是 qwen-image-3.0-pro"
+    os.environ["QWEN_EDIT_MODEL"] = "qwen-image-2.0-pro"
     assert crystal._image_model() == "wan2.7-image-pro", "QWEN_EDIT_MODEL 不得影响 Crystal"
+    assert crystal._base_model() == "qwen-image-3.0-pro", "QWEN_EDIT_MODEL 不得影响 Crystal base"
     os.environ["CRYSTAL_IMAGE_MODEL"] = "wan2.7-image-pro-v2"
+    os.environ["CRYSTAL_BASE_MODEL"] = "qwen-image-3.0-pro-v2"
     assert crystal._image_model() == "wan2.7-image-pro-v2", "CRYSTAL_IMAGE_MODEL 应可覆盖"
+    assert crystal._base_model() == "qwen-image-3.0-pro-v2", "CRYSTAL_BASE_MODEL 应可覆盖"
 finally:
     for k, v in saved_env.items():
         if v is None:
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
-print("[ok] 默认模型 wan2.7-image-pro；QWEN_EDIT_MODEL 不控制 Crystal")
+print("[ok] 双模型分工默认值（base=qwen-image-3.0-pro / 插入=wan2.7-image-pro）与覆盖")
 
 # 8) 架构守卫：一次性合成与顺序插入零残留，无重试/回退
 for gone in ("call_edit", "EDIT_PROMPT", "MAX_INPUT_IMAGES", "MAX_BEAD_GROUPS",
-             "_groups_text", "negative_prompt", "prompt_extend",
+             "_groups_text", "_call_wan",
              "qwen-image-2.0-pro", "build_bead_sheet", "bead_sheet",
              "insert_representative", "build_representative_crops",
              "current = step_out", "placed later", "source_bbox",
@@ -196,7 +201,8 @@ for gone in ("call_edit", "EDIT_PROMPT", "MAX_INPUT_IMAGES", "MAX_BEAD_GROUPS",
     assert gone not in src_text, f"旧架构/回退残留: {gone}"
 assert "wan2.7-image-pro" in src_text, "Crystal 默认模型须为 wan2.7-image-pro"
 assert "CRYSTAL_IMAGE_MODEL" in src_text, "须支持 CRYSTAL_IMAGE_MODEL 覆盖"
-for need in ("_call_wan", "BASE_PROMPT", "INSERT_PROMPT",
+for need in ("_call_image_model", "_base_model", "BASE_NEGATIVE",
+             "qwen-image-3.0-pro", "BASE_PROMPT", "INSERT_PROMPT",
              "generate_base_scene", "build_representative_assets",
              "generate_representative_edit", "merge_independent_edits",
              "_paste_feathered_region", "_expand_pixel_box",
@@ -240,16 +246,20 @@ asset = assets[0]  # 独特标注名ALPHA / identity-text-BETA（display_name �
 calls = []
 
 
-def fake_call_wan(images, prompt, output_path, size="1200*1600", bbox_list=None):
-    calls.append({"images": [Path(p) for p in images], "prompt": prompt,
-                  "output_path": Path(output_path), "size": size,
-                  "bbox_list": bbox_list})
+def fake_call_image_model(model, images, prompt, output_path,
+                          size="1200*1600", bbox_list=None,
+                          prompt_extend=None, negative_prompt=None):
+    calls.append({"model": model, "images": [Path(p) for p in images],
+                  "prompt": prompt, "output_path": Path(output_path),
+                  "size": size, "bbox_list": bbox_list,
+                  "prompt_extend": prompt_extend,
+                  "negative_prompt": negative_prompt})
     Image.new("RGB", (1200, 1600), (230, 228, 222)).save(output_path)
     return Path(output_path)
 
 
-orig_call_wan = crystal._call_wan
-crystal._call_wan = fake_call_wan
+orig_call = crystal._call_image_model
+crystal._call_image_model = fake_call_image_model
 try:
     out = crystal.generate_representative_edit(OUT / "t_canvas.png", asset,
                                                [100, 100, 200, 200],
@@ -263,22 +273,30 @@ try:
     assert c["bbox_list"] == [[], [[120, 160, 240, 320]]], \
         f"bbox_list 必须为 [[], [target_box]]（源图不加框），实际 {c['bbox_list']}"
     assert c["size"] == "1200*1600", "编辑尺寸必须跟随 base 画布"
+    assert c["model"] == "wan2.7-image-pro", "代表件编辑必须用 Wan"
+    assert c["prompt_extend"] is None, "Wan 插入不得传 prompt_extend"
     assert "identity-text-BETA" in c["prompt"], "插入 prompt 必须绑定 visual_identity"
     assert "独特标注名ALPHA" not in c["prompt"], "display_name 不得进入插入 prompt"
 
-    # generate_base_scene：两图（手镯裁剪 + 模板），无散珠、无 bbox_list
+    # generate_base_scene：Qwen、两图（手镯裁剪 + 模板）、无 bbox、prompt_extend=False、负向守卫
     calls.clear()
     crystal.generate_base_scene(OUT / "t_rep.png", OUT / "t_canvas.png",
                                 OUT / "t_base.png", size="1200*1600")
     assert len(calls) == 1, "基础场景恰好一次调用"
     cb = calls[0]
+    assert cb["model"] == "qwen-image-3.0-pro", "base 必须用 Qwen"
     assert len(cb["images"]) == 2 and cb["bbox_list"] is None, \
         "基础场景不得传代表参考或 bbox"
+    assert cb["prompt_extend"] is False, "base 必须 prompt_extend=False"
+    assert cb["negative_prompt"] and "replaced component" in cb["negative_prompt"] \
+        and "duplicated component" in cb["negative_prompt"] \
+        and "missing bead" in cb["negative_prompt"], \
+        "base 负向 prompt 必须含重复/缺失/替换组件守卫"
     assert cb["prompt"] == crystal.BASE_PROMPT
     assert "placed later" not in cb["prompt"], "base prompt 不得提及后续组件"
 finally:
-    crystal._call_wan = orig_call_wan
-print("[ok] generate_representative_edit/base 结构（mock _call_wan，无网络）")
+    crystal._call_image_model = orig_call
+print("[ok] base=Qwen（2 图/无 bbox/prompt_extend=False/负向守卫）+ 插入=Wan（[[], [target]]/无 prompt_extend）")
 
 # 11) 独立性不变量：compose 的每次编辑都收到同一张干净 base，
 #     任何编辑产物都不得成为另一次编辑的输入
@@ -355,15 +373,16 @@ exp = crystal._expand_pixel_box([100, 100, 300, 200], 1000, 1000)
 assert exp == [60, 80, 340, 220], f"非方形框横/纵外扩必须分离（px=40/py=20），实际 {exp}"
 print("[ok] _expand_pixel_box 横纵分离 + ratio 0.20")
 
-# 13) _call_wan bbox_list 长度守卫（长度与图片数不一致时不发请求即拒绝）
+# 13) _call_image_model bbox_list 长度守卫（长度与图片数不一致时不发请求即拒绝）
 try:
-    crystal._call_wan([OUT / "t_rep.png", OUT / "t_canvas.png"],
-                      crystal.INSERT_PROMPT, OUT / "t_unused.png",
-                      bbox_list=[[]])
+    crystal._call_image_model("wan2.7-image-pro",
+                              [OUT / "t_rep.png", OUT / "t_canvas.png"],
+                              crystal.INSERT_PROMPT, OUT / "t_unused.png",
+                              bbox_list=[[]])
     raise SystemExit("FAIL: bbox_list 长度与图片数不一致应立即拒绝")
 except ValueError:
     pass
-print("[ok] _call_wan bbox_list 长度守卫")
+print("[ok] _call_image_model bbox_list 长度守卫")
 
 # 14) 本地准备 + 编辑式标注（无网络）
 clean = crystal.build_clean_source(SAMPLE, good["bracelet_bbox_1000"], OUT / "t_clean.jpg")
