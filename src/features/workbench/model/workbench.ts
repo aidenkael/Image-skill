@@ -5,6 +5,7 @@ import type { AssetRef, AssetRole } from '@/core/assets';
 import type {
   CollageTaskOptions,
   HeroTaskOptions,
+  OptimizeTaskOptions,
   TaskKind,
   TaskRecord,
 } from '@/core/tasks';
@@ -26,6 +27,8 @@ export interface WorkbenchModel {
   activeCollageVariant: number;
   tasks: TaskRecord[];
   latestHeroTask: TaskRecord | null;
+  optimizeOptions: OptimizeTaskOptions;
+  latestOptimizeTask: TaskRecord | null;
   hydrated: boolean;
   busy: boolean;
   error: string | null;
@@ -44,6 +47,8 @@ export interface WorkbenchModel {
   setActiveCollageVariant(index: number): void;
   replaceActiveCollageVariant(doc: TemplateDocument): void;
   runHero(): Promise<TaskRecord | null>;
+  patchOptimizeOptions(patch: Partial<OptimizeTaskOptions>): void;
+  runOptimize(): Promise<TaskRecord | null>;
   createCollageTask(): Promise<TaskRecord | null>;
   setNotice(message: string): void;
   clearStatus(): void;
@@ -100,6 +105,9 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [latestHeroTask, setLatestHeroTask] = useState<TaskRecord | null>(null);
   const [latestHeroTaskId, setLatestHeroTaskId] = useState<string | null>(null);
+  const [optimizeOptions, setOptimizeOptionsState] = useState<OptimizeTaskOptions>(EMPTY_DRAFT.optimizeOptions);
+  const [latestOptimizeTask, setLatestOptimizeTask] = useState<TaskRecord | null>(null);
+  const [latestOptimizeTaskId, setLatestOptimizeTaskId] = useState<string | null>(null);
   const [hydratedWorkspaceId, setHydratedWorkspaceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +134,9 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setTasks([]);
     setLatestHeroTask(null);
     setLatestHeroTaskId(null);
+    setOptimizeOptionsState(EMPTY_DRAFT.optimizeOptions);
+    setLatestOptimizeTask(null);
+    setLatestOptimizeTaskId(null);
     setHydratedWorkspaceId(null);
     setBusy(false);
     setError(null);
@@ -155,6 +166,19 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
           : null;
         const fallbackHeroTask = taskList.find((task) => task.request.kind === 'hero') ?? null;
         const restoredHeroTask = savedHeroTask ?? fallbackHeroTask;
+        const restoredOptimizeOptions = {
+          ...draft.optimizeOptions,
+          sourceAssetId: assetIds.has(draft.optimizeOptions.sourceAssetId)
+            ? draft.optimizeOptions.sourceAssetId
+            : '',
+        };
+        const savedOptimizeTask = draft.latestOptimizeTaskId
+          ? taskList.find(
+              (task) => task.id === draft.latestOptimizeTaskId && task.request.kind === 'optimize',
+            )
+          : null;
+        const fallbackOptimizeTask = taskList.find((task) => task.request.kind === 'optimize') ?? null;
+        const restoredOptimizeTask = savedOptimizeTask ?? fallbackOptimizeTask;
         const activeVariant =
           draft.collageVariants.length === 0
             ? 0
@@ -172,6 +196,9 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
         setActiveCollageVariantState(activeVariant);
         setLatestHeroTask(restoredHeroTask);
         setLatestHeroTaskId(restoredHeroTask?.id ?? null);
+        setOptimizeOptionsState(restoredOptimizeOptions);
+        setLatestOptimizeTask(restoredOptimizeTask);
+        setLatestOptimizeTaskId(restoredOptimizeTask?.id ?? null);
         setHydratedWorkspaceId(workspaceId);
       })
       .catch((reason: unknown) => {
@@ -199,6 +226,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
       collageVariants,
       activeCollageVariant,
       latestHeroTaskId,
+      optimizeOptions,
+      latestOptimizeTaskId,
     });
     const timer = window.setTimeout(() => {
       void saveWorkspaceDraft(workspaceId, draft).catch((reason: unknown) => {
@@ -220,6 +249,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     collageVariants,
     activeCollageVariant,
     latestHeroTaskId,
+    optimizeOptions,
+    latestOptimizeTaskId,
   ]);
 
   const upload = useCallback(async (files: File[]) => {
@@ -287,6 +318,10 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
 
   const patchCollageOptions = useCallback((patch: Partial<CollageTaskOptions>) => {
     setCollageOptionsState((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const patchOptimizeOptions = useCallback((patch: Partial<OptimizeTaskOptions>) => {
+    setOptimizeOptionsState((current) => ({ ...current, ...patch }));
   }, []);
 
   const replaceActiveCollageVariant = useCallback(
@@ -375,6 +410,41 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     }
   }, [collageCount, collageOptions, selectedAssetIds]);
 
+  const runOptimize = useCallback(async (): Promise<TaskRecord | null> => {
+    const currentWorkspaceId = activeWorkspaceRef.current;
+    if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return null;
+    if (!assets.some((asset) => asset.id === optimizeOptions.sourceAssetId)) {
+      setError('请选择一张需要优化的商品图');
+      return null;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const task = await createTask(currentWorkspaceId, {
+        kind: 'optimize',
+        assetIds: [optimizeOptions.sourceAssetId],
+        count: 1,
+        options: optimizeOptions,
+      });
+      const taskList = await listTasks(currentWorkspaceId);
+      if (activeWorkspaceRef.current !== currentWorkspaceId) return null;
+      setTasks(taskList);
+      setLatestOptimizeTask(task);
+      setLatestOptimizeTaskId(task.id);
+      if (task.status === 'failed') setError(task.error ?? '图片优化失败');
+      else setNotice('图片优化完成，可在中间区域下载');
+      return task;
+    } catch (reason) {
+      if (activeWorkspaceRef.current === currentWorkspaceId) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+      return null;
+    } finally {
+      if (activeWorkspaceRef.current === currentWorkspaceId) setBusy(false);
+    }
+  }, [assets, optimizeOptions]);
+
   const clearStatus = useCallback(() => {
     setError(null);
     setNotice(null);
@@ -397,6 +467,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     activeCollageVariant: hydrated ? activeCollageVariant : 0,
     tasks: hydrated ? tasks : [],
     latestHeroTask: hydrated ? latestHeroTask : null,
+    optimizeOptions: hydrated ? optimizeOptions : EMPTY_DRAFT.optimizeOptions,
+    latestOptimizeTask: hydrated ? latestOptimizeTask : null,
     hydrated,
     busy: busy || (workspaceId !== null && !hydrated),
     error,
@@ -414,6 +486,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setActiveCollageVariant: setActiveCollageVariantState,
     replaceActiveCollageVariant,
     runHero,
+    patchOptimizeOptions,
+    runOptimize,
     createCollageTask,
     setNotice: setNoticeMessage,
     clearStatus,

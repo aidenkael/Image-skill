@@ -3,18 +3,12 @@
 import type { RefObject } from 'react';
 import type { TaskRecord } from '@/core/tasks';
 import type { TemplateDocument } from '@/core/templates';
-import { CollageEditor, CollageEditorHandle } from '@/features/collage/components/CollageEditor';
-
-/**
- * 中央画布/预览区：
- * - hero：显示最近一次生成结果
- * - collage：Fabric 可编辑画布（滚动查看全尺寸）
- */
+import { CollageEditor, type CollageEditorHandle } from '@/features/collage/components/CollageEditor';
 
 interface CanvasAreaProps {
   workspaceId: string;
-  kind: 'hero' | 'collage';
-  latestHeroTask: TaskRecord | null;
+  kind: 'hero' | 'collage' | 'optimize';
+  latestTask: TaskRecord | null;
   collageEditorRef: RefObject<CollageEditorHandle | null>;
   collageVariantCount?: number;
   activeCollageVariant?: number;
@@ -25,7 +19,7 @@ interface CanvasAreaProps {
 export function CanvasArea({
   workspaceId,
   kind,
-  latestHeroTask,
+  latestTask,
   collageEditorRef,
   collageVariantCount = 0,
   activeCollageVariant = 0,
@@ -53,60 +47,45 @@ export function CanvasArea({
           </div>
         ) : null}
         <div className="canvas-scroll">
-          <CollageEditor
-            ref={collageEditorRef}
-            workspaceId={workspaceId}
-            onDocumentChange={onCollageDocumentChange}
-          />
+          <CollageEditor ref={collageEditorRef} workspaceId={workspaceId} onDocumentChange={onCollageDocumentChange} />
         </div>
       </section>
     );
   }
 
   const images =
-    latestHeroTask?.status === 'succeeded'
-      ? (latestHeroTask.result?.outputs ?? []).filter(
-          (o): o is Extract<typeof o, { kind: 'image' }> =>
-            o.kind === 'image' && Boolean(o.url),
+    latestTask?.status === 'succeeded'
+      ? (latestTask.result?.outputs ?? []).filter(
+          (output): output is Extract<typeof output, { kind: 'image' }> =>
+            output.kind === 'image' && Boolean(output.url),
         )
       : [];
+  const title = kind === 'hero' ? '氛围主图结果' : '优化结果';
 
   return (
     <section className="canvas-area">
       <div className="canvas-title">
-        氛围主图结果
-        {latestHeroTask && (
-          <span className={`task-status status-${latestHeroTask.status}`}>
-            {latestHeroTask.status}
-          </span>
-        )}
+        {title}
+        {latestTask ? <span className={`task-status status-${latestTask.status}`}>{latestTask.status}</span> : null}
       </div>
       {images.length > 0 ? (
         <div className="result-grid">
-          {images.map((img, i) => (
-            <div key={`${img.url}-${i}`} className="result-card">
-              <img
-                src={img.url}
-                alt={`生成结果 ${i + 1}`}
-                className="result-img"
-              />
-              <a
-                className="btn result-download"
-                href={img.url}
-                download={`hero-result-${i + 1}`}
-              >
-                下载
-              </a>
+          {images.map((image, index) => (
+            <div key={`${image.url}-${index}`} className="result-card">
+              <img src={image.url} alt={`${title} ${index + 1}`} className="result-img" />
+              <a className="btn result-download" href={image.url} download={`${kind}-result-${index + 1}`}>下载</a>
             </div>
           ))}
         </div>
       ) : (
         <div className="empty-canvas">
-          {latestHeroTask?.status === 'failed'
-            ? '生成失败，请查看右侧错误提示'
-            : latestHeroTask?.status === 'running'
-              ? '生成中…'
-              : '选择商品图片并设置方向后，点击“生成氛围主图”'}
+          {latestTask?.status === 'failed'
+            ? '处理失败，请查看右侧错误提示'
+            : latestTask?.status === 'running'
+              ? '处理中…'
+              : kind === 'hero'
+                ? '选择商品图片与视觉方向后，生成氛围主图'
+                : '选择一张商品图并设置输出规格后，优化图片'}
         </div>
       )}
     </section>

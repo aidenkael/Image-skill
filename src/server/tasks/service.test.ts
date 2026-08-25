@@ -25,7 +25,7 @@ afterAll(() => {
 });
 
 describe('Workspace 任务素材归属校验', () => {
-  it('Hero 和 Collage 均拒绝外部或不存在的素材，且校验失败不落盘任务 JSON', async () => {
+  it('Hero、Collage 与 Optimize 均拒绝外部或不存在的素材，且校验失败不落盘任务 JSON', async () => {
     const workspaceA = await createWorkspace('商品 A');
     const workspaceB = await createWorkspace('商品 B');
     const foreignAssetId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -69,6 +69,23 @@ describe('Workspace 任务素材归属校验', () => {
           title: '',
           includeSellingPoints: true,
           sellingPoints: ['', '', ''],
+        },
+      }),
+    ).rejects.toThrow(`任务引用了不属于当前商品的图片: ${missingAssetId}`);
+
+    await expect(
+      createTask(workspaceA.id, {
+        kind: 'optimize',
+        assetIds: [missingAssetId],
+        count: 1,
+        options: {
+          sourceAssetId: missingAssetId,
+          ratio: 'original',
+          fit: 'contain',
+          background: 'white',
+          maxEdge: 1600,
+          quality: 90,
+          format: 'jpg',
         },
       }),
     ).rejects.toThrow(`任务引用了不属于当前商品的图片: ${missingAssetId}`);

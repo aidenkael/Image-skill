@@ -19,6 +19,18 @@ interface AssetPanelProps {
   onSetRole(id: string, role: AssetRole): void;
 }
 
+const ROLE_LABELS: Record<AssetRole, string> = {
+  primary: '主图',
+  front: '正面',
+  back: '背面',
+  side: '侧面',
+  inside: '内部',
+  detail: '细节',
+  size: '尺寸图',
+  reference: '参考图',
+  unknown: '未分类',
+};
+
 export function AssetPanel({
   workspaceId,
   assets,
@@ -41,7 +53,7 @@ export function AssetPanel({
   return (
     <aside className="panel assets-panel">
       <div className="panel-title">
-        商品图片
+        商品素材
         <span className="panel-sub">{assets.length} 张 · 已选 {selectedIds.length}</span>
       </div>
 
@@ -104,7 +116,7 @@ export function AssetPanel({
               >
                 {ASSET_ROLES.map((role) => (
                   <option key={role} value={role}>
-                    {role}
+                    {ROLE_LABELS[role]}
                   </option>
                 ))}
               </select>

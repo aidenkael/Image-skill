@@ -1,18 +1,15 @@
 'use client';
 
 import type { AssetRef } from '@/core/assets';
+import type { ProductIntelligenceRecord } from '@/core/intelligence';
 import { assetUrl } from '@/core/results';
 import type { HeroTaskOptions } from '@/core/tasks';
-
-/**
- * 氛围主图控制面板。
- * 不暴露 prompt / 模型 id / Provider 内部细节；只有用户方向选项。
- */
 
 interface HeroControlsProps {
   workspaceId: string;
   options: HeroTaskOptions;
   assets: AssetRef[];
+  intelligence: ProductIntelligenceRecord | null;
   count: number;
   busy: boolean;
   onChange(patch: Partial<HeroTaskOptions>): void;
@@ -20,23 +17,13 @@ interface HeroControlsProps {
   onGenerate(): void;
 }
 
-const RATIOS: Array<{ value: HeroTaskOptions['ratio']; label: string }> = [
-  { value: '1:1', label: '1:1 方形' },
-  { value: '3:4', label: '3:4 竖版' },
-  { value: '4:3', label: '4:3 横版' },
-];
-
-const PERSONS: Array<{ value: HeroTaskOptions['person']; label: string }> = [
-  { value: 'auto', label: '自动' },
-  { value: 'none', label: '无人物' },
-  { value: 'hand', label: '手部展示' },
-  { value: 'person', label: '完整人物' },
-];
+const PERSON_LABELS = { none: '无人物', hand: '手部展示', person: '完整人物' } as const;
 
 export function HeroControls({
   workspaceId,
   options,
   assets,
+  intelligence,
   count,
   busy,
   onChange,
@@ -44,121 +31,71 @@ export function HeroControls({
   onGenerate,
 }: HeroControlsProps) {
   const sourceAsset = assets.find((asset) => asset.id === options.sourceAssetId);
+  const directions = intelligence?.plan.heroDirections ?? [];
+  const autoReady = directions.length > 0;
+  const canGenerate =
+    Boolean(sourceAsset) &&
+    (options.sceneMode === 'auto' ? autoReady : Boolean(options.scenePrompt?.trim()));
 
   return (
     <div className="controls-body">
       <div className="field">
-        <label className="field-label" htmlFor="hero-source-asset">
-          源商品图（仅 1 张）
-        </label>
-        <select
-          id="hero-source-asset"
-          className="input"
-          value={options.sourceAssetId}
-          onChange={(e) => onChange({ sourceAssetId: e.target.value })}
-        >
+        <label className="field-label" htmlFor="hero-source-asset">源商品图（仅 1 张）</label>
+        <select id="hero-source-asset" className="input" value={options.sourceAssetId} onChange={(event) => onChange({ sourceAssetId: event.target.value })}>
           <option value="">请选择源商品图</option>
-          {assets.map((asset) => (
-            <option key={asset.id} value={asset.id}>
-              {asset.name}
-            </option>
-          ))}
+          {assets.filter((asset) => asset.role !== 'reference').map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
         </select>
-        {sourceAsset ? (
-          <div className="hero-source-preview">
-            <img src={assetUrl(workspaceId, sourceAsset.id, 'thumb')} alt={sourceAsset.name} />
-            <span>{sourceAsset.name}</span>
-          </div>
-        ) : null}
+        {sourceAsset ? <div className="hero-source-preview"><img src={assetUrl(workspaceId, sourceAsset.id, 'thumb')} alt={sourceAsset.name} /><span>{sourceAsset.name}</span></div> : null}
       </div>
 
       <div className="field">
-        <label className="field-label">输出数量</label>
-        <div className="seg">
-          {[1, 2, 3, 4].map((n) => (
-            <button
-              key={n}
-              type="button"
-              className={`seg-btn${count === n ? ' is-active' : ''}`}
-              onClick={() => onCountChange(n)}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
+        <label className="field-label">视觉方向</label>
+        {directions.map((direction) => (
+          <button
+            key={direction.id}
+            type="button"
+            className={`direction-card${options.sceneMode === 'auto' && options.directionId === direction.id ? ' is-active' : ''}`}
+            onClick={() => onChange({
+              sceneMode: 'auto',
+              directionId: direction.id,
+              sourceAssetId: direction.sourceAssetId,
+            })}
+          >
+            <strong>{direction.title}</strong>
+            <span>{direction.scene}</span>
+            <span>{direction.composition}</span>
+            <small>人物建议：{PERSON_LABELS[direction.person]}</small>
+          </button>
+        ))}
+        {!autoReady ? <div className="hint">先分析商品获取推荐方向，或切换到自定义方向</div> : null}
+        <button type="button" className={`direction-card custom-direction${options.sceneMode === 'prompt' ? ' is-active' : ''}`} onClick={() => onChange({ sceneMode: 'prompt', directionId: undefined })}>
+          <strong>自定义方向</strong>
+          <span>由你明确描述想要的场景与氛围</span>
+        </button>
+        {options.sceneMode === 'prompt' ? <textarea className="input textarea" placeholder="例如：阳光充足的北欧风客厅，木地板，产品放在茶几上" value={options.scenePrompt ?? ''} maxLength={500} onChange={(event) => onChange({ scenePrompt: event.target.value })} /> : null}
       </div>
 
-      <div className="field">
-        <label className="field-label">画面比例</label>
-        <div className="seg">
-          {RATIOS.map((r) => (
-            <button
-              key={r.value}
-              type="button"
-              className={`seg-btn${options.ratio === r.value ? ' is-active' : ''}`}
-              onClick={() => onChange({ ratio: r.value })}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Choice label="输出数量" current={String(count)} values={['1', '2', '3', '4']} onSelect={(value) => onCountChange(Number(value))} />
+      <Choice label="画面比例" current={options.ratio} values={['1:1', '3:4', '4:3']} labels={['1:1 方形', '3:4 竖版', '4:3 横版']} onSelect={(value) => onChange({ ratio: value as HeroTaskOptions['ratio'] })} />
 
       <div className="field">
         <label className="field-label">人物</label>
-        <select
-          className="input"
-          value={options.person}
-          onChange={(e) => onChange({ person: e.target.value as HeroTaskOptions['person'] })}
-        >
-          {PERSONS.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
+        <select className="input" value={options.person} onChange={(event) => onChange({ person: event.target.value as HeroTaskOptions['person'] })}>
+          <option value="auto">跟随推荐</option>
+          <option value="none">无人物</option>
+          <option value="hand">手部展示</option>
+          <option value="person">完整人物</option>
         </select>
       </div>
 
-      <div className="field">
-        <label className="field-label">场景</label>
-        <div className="seg">
-          <button
-            type="button"
-            className={`seg-btn${options.sceneMode === 'auto' ? ' is-active' : ''}`}
-            onClick={() => onChange({ sceneMode: 'auto' })}
-          >
-            自动搭配
-          </button>
-          <button
-            type="button"
-            className={`seg-btn${options.sceneMode === 'prompt' ? ' is-active' : ''}`}
-            onClick={() => onChange({ sceneMode: 'prompt' })}
-          >
-            手动描述
-          </button>
-        </div>
-        {options.sceneMode === 'prompt' && (
-          <textarea
-            className="input textarea"
-            placeholder="描述想要的场景，例如：阳光充足的北欧风客厅，木地板，产品放在茶几上"
-            value={options.scenePrompt ?? ''}
-            maxLength={500}
-            onChange={(e) => onChange({ scenePrompt: e.target.value })}
-          />
-        )}
-      </div>
-
       <div className="controls-actions">
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={busy || !sourceAsset}
-          onClick={onGenerate}
-        >
-          {busy ? '生成中…' : '生成氛围主图'}
-        </button>
-        {!sourceAsset && <div className="hint">请从已上传图片中明确选择一张源商品图</div>}
+        <button type="button" className="btn btn-primary" disabled={busy || !canGenerate} onClick={onGenerate}>{busy ? '生成中…' : '生成氛围主图'}</button>
+        {!sourceAsset ? <div className="hint">请明确选择一张非参考源商品图</div> : null}
       </div>
     </div>
   );
+}
+
+function Choice({ label, current, values, labels = values, onSelect }: { label: string; current: string; values: string[]; labels?: string[]; onSelect(value: string): void }) {
+  return <div className="field"><label className="field-label">{label}</label><div className="seg">{values.map((value, index) => <button key={value} type="button" className={`seg-btn${current === value ? ' is-active' : ''}`} onClick={() => onSelect(value)}>{labels[index]}</button>)}</div></div>;
 }

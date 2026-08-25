@@ -53,13 +53,20 @@ describe('任务请求校验（count 按任务类型限制）', () => {
     );
   });
 
-  it('detail / optimize 明确拒绝（V2 阶段）', () => {
+  it('optimize 可执行且固定单源单输出，detail 保持拒绝', () => {
+    const optimize = {
+      kind: 'optimize', assetIds: ['a1'], count: 1,
+      options: {
+        sourceAssetId: 'a1', ratio: 'original', fit: 'contain', background: 'white',
+        maxEdge: 1600, quality: 90, format: 'jpg',
+      },
+    };
+    expect(validateCreateTaskRequest(optimize, ctx).kind).toBe('optimize');
+    expect(() => validateCreateTaskRequest({ ...optimize, count: 2 }, ctx)).toThrow();
+    expect(() => validateCreateTaskRequest({ ...optimize, assetIds: ['a1', 'a2'] }, ctx)).toThrow(/只能提交一张/);
     expect(() =>
       validateCreateTaskRequest({ ...validHero, kind: 'detail' }, ctx),
-    ).toThrow(/V2 阶段/);
-    expect(() =>
-      validateCreateTaskRequest({ ...validHero, kind: 'optimize' }, ctx),
-    ).toThrow(/V2 阶段/);
+    ).toThrow(/后续阶段/);
   });
 
   it('collage 未知模板被拒绝', () => {

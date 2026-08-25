@@ -5,6 +5,7 @@ import {
   HeroPersonSchema,
   HeroSceneModeSchema,
   CollageTaskOptionsSchema,
+  OptimizeTaskOptionsSchema,
 } from './tasks';
 import { TemplateDocumentSchema } from './templates';
 
@@ -27,7 +28,12 @@ export const WorkspaceHeroDraftOptionsSchema = z.object({
   ratio: HeroRatioSchema,
   person: HeroPersonSchema,
   sceneMode: HeroSceneModeSchema,
+  directionId: z.string().max(40).optional(),
   scenePrompt: z.string().max(500).optional(),
+});
+
+export const WorkspaceOptimizeDraftOptionsSchema = OptimizeTaskOptionsSchema.extend({
+  sourceAssetId: z.string(),
 });
 
 export const WorkspaceDraftSchema = z.object({
@@ -55,6 +61,17 @@ export const WorkspaceDraftSchema = z.object({
   activeCollageVariant: z.number().int().min(0).default(0),
 
   latestHeroTaskId: z.string().uuid().nullable().default(null),
+
+  optimizeOptions: WorkspaceOptimizeDraftOptionsSchema.default({
+    sourceAssetId: '',
+    ratio: 'original',
+    fit: 'contain',
+    background: 'white',
+    maxEdge: 1600,
+    quality: 90,
+    format: 'jpg',
+  }),
+  latestOptimizeTaskId: z.string().uuid().nullable().default(null),
 });
 
 export type WorkspaceDraft = z.infer<typeof WorkspaceDraftSchema>;

@@ -1,6 +1,7 @@
 'use client';
 
 import type { AssetRef } from '@/core/assets';
+import type { ProductIntelligenceRecord } from '@/core/intelligence';
 import type { CollageTaskOptions } from '@/core/tasks';
 import type { TemplateDocument } from '@/core/templates';
 
@@ -17,6 +18,7 @@ interface CollageControlsProps {
   busy: boolean;
   collageDoc: TemplateDocument | null;
   assets: AssetRef[];
+  intelligence: ProductIntelligenceRecord | null;
   onChange(patch: Partial<CollageTaskOptions>): void;
   onCountChange(n: number): void;
   onCreateLayout(): void;
@@ -32,6 +34,7 @@ export function CollageControls({
   busy,
   collageDoc,
   assets,
+  intelligence,
   onChange,
   onCountChange,
   onCreateLayout,
@@ -40,9 +43,52 @@ export function CollageControls({
 }: CollageControlsProps) {
   const imageSlots =
     collageDoc?.layers.filter((l) => l.type === 'image') ?? [];
+  const suggestions = intelligence?.plan.collage ?? null;
+
+  function applyRecommendedCopy() {
+    const title = suggestions?.titleOptions[0] ?? '';
+    const sellingPoints = (suggestions?.sellingPoints ?? []).slice(0, 3).map((item) => item.text);
+    onChange({
+      title,
+      includeTitle: Boolean(title),
+      sellingPoints,
+      includeSellingPoints: sellingPoints.length > 0,
+    });
+  }
 
   return (
     <div className="controls-body">
+      <div className="field suggestion-panel">
+        <label className="field-label">AI 文案建议</label>
+        {suggestions ? (
+          <>
+            <div className="suggestion-chips">
+              {suggestions.titleOptions.map((title) => (
+                <button key={title} type="button" onClick={() => onChange({ title, includeTitle: true })}>{title}</button>
+              ))}
+            </div>
+            <div className="selling-suggestions">
+              {suggestions.sellingPoints.map((point) => (
+                <button
+                  key={point.text}
+                  type="button"
+                  onClick={() => {
+                    const current = (options.sellingPoints ?? []).filter(Boolean);
+                    onChange({
+                      sellingPoints: [...new Set([...current, point.text])].slice(0, 3),
+                      includeSellingPoints: true,
+                    });
+                  }}
+                >
+                  <span>{point.text}</span><small>有图片依据</small>
+                </button>
+              ))}
+            </div>
+            <button type="button" className="btn" onClick={applyRecommendedCopy}>应用推荐文案</button>
+          </>
+        ) : <div className="hint">分析商品后可获得有图片依据的标题与卖点建议，手动编辑仍可直接使用。</div>}
+      </div>
+
       <div className="field">
         <label className="field-label">布局模板</label>
         <div className="template-list">

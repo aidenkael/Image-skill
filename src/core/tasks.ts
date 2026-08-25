@@ -9,8 +9,7 @@ import { TaskResultSchema } from './results';
 export const TASK_KINDS = ['hero', 'collage', 'detail', 'optimize'] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
-/** V1 可执行的任务类型；detail/optimize 仅保留接口边界 */
-export const EXECUTABLE_TASK_KINDS: readonly TaskKind[] = ['hero', 'collage'];
+export const EXECUTABLE_TASK_KINDS: readonly TaskKind[] = ['hero', 'collage', 'optimize'];
 
 export const HeroRatioSchema = z.enum(['1:1', '3:4', '4:3']);
 export type HeroRatio = z.infer<typeof HeroRatioSchema>;
@@ -26,6 +25,7 @@ export const HeroTaskOptionsSchema = z.object({
   ratio: HeroRatioSchema,
   person: HeroPersonSchema,
   sceneMode: HeroSceneModeSchema,
+  directionId: z.string().max(40).optional(),
   scenePrompt: z.string().max(500).optional(),
 });
 export type HeroTaskOptions = z.infer<typeof HeroTaskOptionsSchema>;
@@ -39,10 +39,27 @@ export const CollageTaskOptionsSchema = z.object({
 });
 export type CollageTaskOptions = z.infer<typeof CollageTaskOptionsSchema>;
 
+export const OptimizeRatioSchema = z.enum(['original', '1:1', '3:4', '4:3']);
+export const OptimizeFitSchema = z.enum(['contain', 'cover']);
+export const OptimizeBackgroundSchema = z.enum(['white', 'light-gray']);
+export const OptimizeFormatSchema = z.enum(['jpg', 'png', 'webp']);
+
+export const OptimizeTaskOptionsSchema = z.object({
+  sourceAssetId: z.string().min(1),
+  ratio: OptimizeRatioSchema,
+  fit: OptimizeFitSchema,
+  background: OptimizeBackgroundSchema,
+  maxEdge: z.union([z.literal(1024), z.literal(1600), z.literal(2000)]),
+  quality: z.number().int().min(70).max(100),
+  format: OptimizeFormatSchema,
+});
+export type OptimizeTaskOptions = z.infer<typeof OptimizeTaskOptionsSchema>;
+
 /** 各任务类型的输出数量上限（count 按任务类型校验） */
-export const TASK_COUNT_LIMITS: Record<'hero' | 'collage', { min: number; max: number }> = {
+export const TASK_COUNT_LIMITS: Record<'hero' | 'collage' | 'optimize', { min: number; max: number }> = {
   hero: { min: 1, max: 4 },
   collage: { min: 1, max: 3 },
+  optimize: { min: 1, max: 1 },
 };
 
 export const TaskStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed']);
@@ -55,6 +72,7 @@ export const CreateTaskRequestSchema = z.object({
   options: z.union([
     HeroTaskOptionsSchema,
     CollageTaskOptionsSchema,
+    OptimizeTaskOptionsSchema,
     z.record(z.string(), z.unknown()),
   ]),
 });
@@ -81,8 +99,8 @@ export interface TaskValidationContext {
 
 /**
  * 任务请求运行时校验（zod 为唯一事实来源）。
- * - count 按任务类型校验：hero 1..4、collage 1..3
- * - detail / optimize 明确拒绝（V2 阶段能力）
+ * - count 按任务类型校验：hero 1..4、collage 1..3、optimize 固定 1
+ * - detail 明确拒绝（后续阶段能力）
  * - collage 校验模板存在且 count 不超过可用模板数（避免生成无意义重复布局）
  */
 export function validateCreateTaskRequest(
@@ -99,9 +117,7 @@ export function validateCreateTaskRequest(
   const req = parsed.data;
 
   if (!EXECUTABLE_TASK_KINDS.includes(req.kind)) {
-    throw new TaskValidationError(
-      '“详情页图”与“简单优化”为 V2 阶段能力，V1 仅支持“氛围主图”与“组合卖点图”',
-    );
+    throw new TaskValidationError('“详情页图”为后续阶段能力，当前不可执行');
   }
 
   // 可执行任务按 kind 做严格 options 校验（zod 唯一事实来源）
@@ -129,9 +145,24 @@ export function validateCreateTaskRequest(
       throw new TaskValidationError(`组合卖点图选项不合法：${detail}`);
     }
     req.options = parsed.data;
+  } else if (req.kind === 'optimize') {
+    const parsed = OptimizeTaskOptionsSchema.safeParse(req.options);
+    if (!parsed.success) {
+      const detail = parsed.error.issues
+        .map((i) => `${i.path.join('.') || 'options'}: ${i.message}`)
+        .join('; ');
+      throw new TaskValidationError(`简单优化选项不合法：${detail}`);
+    }
+    req.options = parsed.data;
+    const [onlyAssetId] = req.assetIds;
+    if (req.assetIds.length !== 1 || onlyAssetId !== parsed.data.sourceAssetId) {
+      throw new TaskValidationError(
+        '简单优化必须且只能提交一张源商品图片，并与 sourceAssetId 一致',
+      );
+    }
   }
 
-  const limits = TASK_COUNT_LIMITS[req.kind as 'hero' | 'collage'];
+  const limits = TASK_COUNT_LIMITS[req.kind as 'hero' | 'collage' | 'optimize'];
   if (req.count < limits.min || req.count > limits.max) {
     throw new TaskValidationError(`${req.kind} 任务的输出数量必须为 ${limits.min}..${limits.max}`);
   }

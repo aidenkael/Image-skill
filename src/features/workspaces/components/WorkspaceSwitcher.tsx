@@ -6,7 +6,6 @@ import type { Workspace } from '@/core/workspaces';
 interface WorkspaceSwitcherProps {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
-  activeWorkspace: Workspace | null;
   creating: boolean;
   createOpen: boolean;
   error: string | null;
@@ -18,7 +17,6 @@ interface WorkspaceSwitcherProps {
 export function WorkspaceSwitcher({
   workspaces,
   activeWorkspaceId,
-  activeWorkspace,
   creating,
   createOpen,
   error,
@@ -43,9 +41,9 @@ export function WorkspaceSwitcher({
 
   return (
     <div className="workspace-switcher">
-      <span className="workspace-current" title={activeWorkspace?.name ?? '尚未新建商品'}>
-        {activeWorkspace?.name ?? '尚未选择商品'}
-      </span>
+      {workspaces.length === 0 ? (
+        <span className="workspace-current">尚未选择商品</span>
+      ) : null}
       {workspaces.length > 0 ? (
         <select
           className="workspace-select"

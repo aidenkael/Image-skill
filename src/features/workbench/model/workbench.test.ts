@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskRecord } from '@/core/tasks';
+import { DEFAULT_WORKSPACE_DRAFT, WorkspaceDraftSchema } from '@/core/workspaces';
 import { heroRunStatePatch } from './workbench';
 
 /**
@@ -35,6 +36,17 @@ function heroTask(
 
 const SUCCEEDED_ID = '11111111-1111-4111-8111-111111111111';
 const FAILED_ID = '22222222-2222-4222-8222-222222222222';
+
+describe('Workspace 三任务草稿契约', () => {
+  it('允许尚未选择源图的 Optimize 默认草稿并保留恢复字段', () => {
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.directionId).toBeUndefined();
+    expect(DEFAULT_WORKSPACE_DRAFT.optimizeOptions).toMatchObject({
+      sourceAssetId: '', ratio: 'original', format: 'jpg',
+    });
+    expect(DEFAULT_WORKSPACE_DRAFT.latestOptimizeTaskId).toBeNull();
+    expect(WorkspaceDraftSchema.parse({ ...DEFAULT_WORKSPACE_DRAFT })).toEqual(DEFAULT_WORKSPACE_DRAFT);
+  });
+});
 
 describe('heroRunStatePatch：最新 Hero 任务状态一致性', () => {
   it('已有成功任务在状态中时，新的失败任务仍成为最新任务，且错误来自该任务', () => {

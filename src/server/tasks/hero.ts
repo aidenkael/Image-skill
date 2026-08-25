@@ -1,8 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { CreateTaskRequest, HeroTaskOptions } from '@/core/tasks';
+import { isIntelligenceFresh, type ProductIntelligenceRecord } from '@/core/intelligence';
 import { TaskResult, taskOutputUrl } from '@/core/results';
-import { assetFile } from '@/server/assets/service';
+import { assetFile, listAssets } from '@/server/assets/service';
+import { getWorkspaceIntelligence } from '@/server/intelligence/service';
 import { AliyunQwenImageProvider } from '@/server/providers/aliyun-qwen-image';
 import { ensureDir } from '@/server/storage/fs-store';
 import { readImageMeta } from '@/server/image/sharp';
@@ -35,18 +37,27 @@ const PERSON_INSTRUCTIONS: Record<string, string> = {
   person: 'A complete real person naturally uses or wears the product, fully visible.',
 };
 
-export function buildHeroPrompt(request: CreateTaskRequest): string {
+type HeroDirection = ProductIntelligenceRecord['plan']['heroDirections'][number];
+
+export function buildHeroPrompt(
+  request: CreateTaskRequest,
+  direction?: HeroDirection,
+): string {
   const opts = request.options as HeroTaskOptions;
   const parts: string[] = [PRODUCT_FIDELITY_INSTRUCTION];
   if (opts.sceneMode === 'prompt' && opts.scenePrompt?.trim()) {
     parts.push(`Scene: ${opts.scenePrompt.trim()}`);
   } else {
+    if (!direction) throw new Error('AI 推荐方向不存在，请重新分析商品');
     parts.push(
-      'Choose a realistic lifestyle scene appropriate for the product, commercial photography style, natural light and shadow.',
+      `Direction: ${direction.prompt}`,
+      `Composition: ${direction.composition}`,
+      `Lighting: ${direction.lighting}`,
     );
   }
-  if (opts.person !== 'auto') {
-    const person = PERSON_INSTRUCTIONS[opts.person];
+  const resolvedPerson = opts.person === 'auto' ? direction?.person : opts.person;
+  if (resolvedPerson) {
+    const person = PERSON_INSTRUCTIONS[resolvedPerson];
     if (person) parts.push(person);
   }
   return parts.join(' ');
@@ -69,10 +80,26 @@ export async function runHeroTask(
   const source = await assetFile(workspaceId, opts.sourceAssetId, 'original');
   if (!source) throw new Error('源商品图片不存在或已被删除');
 
+  let direction: HeroDirection | undefined;
+  if (opts.sceneMode === 'auto') {
+    const intelligence = await getWorkspaceIntelligence(workspaceId);
+    if (!intelligence) throw new Error('请先分析商品获取 AI 推荐方向');
+    const assets = await listAssets(workspaceId);
+    if (!isIntelligenceFresh(intelligence, assets)) {
+      throw new Error('商品素材已变化，请重新分析后再使用 AI 推荐方向');
+    }
+    direction = opts.directionId
+      ? intelligence.plan.heroDirections.find((item) => item.id === opts.directionId)
+      : intelligence.plan.heroDirections[0];
+    if (!direction) throw new Error('所选 AI 推荐方向不存在，请重新选择');
+  } else if (!opts.scenePrompt?.trim()) {
+    throw new Error('请填写自定义场景方向');
+  }
+
   const provider = new AliyunQwenImageProvider();
   const generated = await provider.generate({
     imagePath: source.filePath,
-    prompt: buildHeroPrompt(request),
+    prompt: buildHeroPrompt(request, direction),
     size: heroSizeForRatio(opts.ratio),
     count: request.count,
   });

@@ -11,6 +11,7 @@ import { TaskResult, TaskResultSchema } from '@/core/results';
 import { COLLAGE_TEMPLATE_IDS } from '@/core/templates';
 import { runHeroTask } from './hero';
 import { runCollageTask } from './collage';
+import { runOptimizeTask } from './optimize';
 import { readJson, UUID_RE, writeJson } from '@/server/storage/fs-store';
 import { workspaceRuntimePath } from '@/server/workspaces/service';
 import { getAsset } from '@/server/assets/service';
@@ -57,10 +58,20 @@ export async function createTask(workspaceId: string, raw: unknown): Promise<Tas
   await writeJson(taskFile(workspaceId, id), record);
 
   try {
-    const result: TaskResult =
-      request.kind === 'hero'
-        ? await runHeroTask(workspaceId, request, id)
-        : await runCollageTask(request);
+    let result: TaskResult;
+    switch (request.kind) {
+      case 'hero':
+        result = await runHeroTask(workspaceId, request, id);
+        break;
+      case 'collage':
+        result = await runCollageTask(request);
+        break;
+      case 'optimize':
+        result = await runOptimizeTask(workspaceId, request, id);
+        break;
+      default:
+        throw new TaskValidationError('当前任务类型不可执行');
+    }
     record.status = 'succeeded';
     record.result = result;
   } catch (err) {
