@@ -14,7 +14,7 @@ import { ProviderConfigError, ProviderRequestError } from './image-provider';
 
 /**
  * Provider 定向测试：不消耗付费额度（fetch 全部打桩）。
- * 覆盖：无 Key 配置错误、模型与参数（n / size / prompt_extend=false）、
+ * 覆盖：无 Key 配置错误、模型与参数（n / size / prompt_extend=true）、
  * 请求内容构造、端点选择。
  */
 
@@ -87,7 +87,7 @@ describe('AliyunQwenImageProvider', () => {
 
     expect(captured.payload?.model).toBe(QWEN_IMAGE_MODEL);
     expect(captured.payload?.model).toBe('qwen-image-3.0-pro');
-    expect(captured.payload?.parameters.prompt_extend).toBe(false);
+    expect(captured.payload?.parameters.prompt_extend).toBe(true);
     expect(captured.payload?.parameters.n).toBe(2);
     expect(captured.payload?.parameters.size).toBe('768*1344');
     expect(result.map((r) => r.url)).toEqual([
