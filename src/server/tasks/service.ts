@@ -13,6 +13,7 @@ import { runHeroTask } from './hero';
 import { runCollageTask } from './collage';
 import { readJson, UUID_RE, writeJson } from '@/server/storage/fs-store';
 import { workspaceRuntimePath } from '@/server/workspaces/service';
+import { getAsset } from '@/server/assets/service';
 
 /**
  * 任务服务：单条任务的通用入口（未来批量调用方复用同一契约）。
@@ -35,6 +36,13 @@ export async function createTask(workspaceId: string, raw: unknown): Promise<Tas
   const request = validateCreateTaskRequest(raw, {
     availableCollageTemplates: COLLAGE_TEMPLATE_IDS,
   });
+
+  for (const assetId of request.assetIds) {
+    const asset = await getAsset(workspaceId, assetId);
+    if (!asset) {
+      throw new TaskValidationError(`任务引用了不属于当前商品的图片: ${assetId}`);
+    }
+  }
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();

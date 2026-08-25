@@ -59,3 +59,14 @@ export function buildCollageDocument(
   }
   return { ...template, layers };
 }
+
+/** 切换方案前，把当前正在编辑的方案序列化结果合并回方案列表（保留现场编辑） */
+export function mergeActiveVariantEdit(
+  variants: TemplateDocument[],
+  activeIndex: number,
+  edited: TemplateDocument | null,
+): TemplateDocument[] {
+  return variants.map((doc, index) =>
+    index === activeIndex && edited ? edited : doc,
+  );
+}

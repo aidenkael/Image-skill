@@ -43,6 +43,7 @@ export const CollageEditor = forwardRef<CollageEditorHandle, CollageEditorProps>
         const host = hostRef.current;
         if (!host) return;
         const version = ++layoutVersionRef.current;
+        const layoutWorkspaceId = workspaceIdRef.current;
         controllerRef.current?.dispose();
         controllerRef.current = null;
         host.innerHTML = '';
@@ -54,6 +55,13 @@ export const CollageEditor = forwardRef<CollageEditorHandle, CollageEditorProps>
           doc,
           (assetId) => assetUrl(workspaceIdRef.current, assetId),
           (layers) => {
+            if (
+              layoutVersionRef.current !== version ||
+              workspaceIdRef.current !== layoutWorkspaceId
+            ) {
+              return;
+            }
+
             const current = documentRef.current;
             if (!current) return;
             const next = { ...current, layers };

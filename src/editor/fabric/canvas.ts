@@ -24,6 +24,7 @@ export async function createEditorCanvas(
   getAssetSrc: (assetId: string) => string,
   onDocumentChange?: (layers: EditorLayer[]) => void,
 ): Promise<EditorCanvasController> {
+  let disposed = false;
   const fabric = await import('@fabricjs/browser');
   const canvasEl = document.createElement('canvas');
   container.appendChild(canvasEl);
@@ -42,6 +43,7 @@ export async function createEditorCanvas(
   canvas.requestRenderAll();
 
   const emitDocumentChange = () => {
+    if (disposed) return;
     onDocumentChange?.(serializeDocument(canvas));
   };
   canvas.on('object:modified', emitDocumentChange);
@@ -68,7 +70,7 @@ export async function createEditorCanvas(
           return null;
         }
       })();
-      if (!img) return;
+      if (disposed || !img) return;
       canvas.remove(existing);
       if (slot) applyImageFit(fabric, img, slot);
       const meta = img as { layerId?: string; layerType?: string; slot?: ImageSlotLayer };
@@ -85,6 +87,7 @@ export async function createEditorCanvas(
     exportPNG: (scale = 2) => exportPNG(canvas, scale),
 
     dispose() {
+      disposed = true;
       void canvas.dispose();
     },
   };

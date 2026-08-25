@@ -92,6 +92,10 @@ export async function runHeroTask(
     outputs.push({ kind: 'image', url: taskOutputUrl(workspaceId, taskId, fileName) });
     idx += 1;
   }
-  if (outputs.length === 0) throw new Error('模型未返回可用的生成结果');
+  if (outputs.length !== request.count) {
+    throw new Error(
+      `模型返回结果数量不完整：要求 ${request.count} 张，实际 ${outputs.length} 张`,
+    );
+  }
   return { outputs };
 }

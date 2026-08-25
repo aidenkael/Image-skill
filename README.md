@@ -32,7 +32,7 @@ cp .env.example .env   # 至少填写 DASHSCOPE_API_KEY
 pnpm dev              # http://localhost:3000
 
 # 4. 验证
-pnpm test --run       # 定向测试：Workspace / 任务 / 模板契约与路径隔离
+pnpm test --run       # 定向测试（全打桩，不消耗付费额度）
 pnpm build            # 类型检查 + 生产构建
 ```
 
@@ -41,7 +41,8 @@ pnpm build            # 类型检查 + 生产构建
 1. **新建或选择商品**（一个商品对应一个独立 Workspace，新建时必须输入名称）
 2. **上传商品图**（左侧面板，支持拖拽，JPEG/PNG/WebP，≤20MB）
 3. **切换任务**（顶部：氛围主图 / 组合卖点图 / 详情页图 / 简单优化）
-4. **氛围主图**：选择源图 → 输出数量 / 比例 / 人物 / 场景 → 生成（未配置 Key 时会明确报错）
+4. **氛围主图**：选择源图 → 输出数量 / 比例 / 人物 / 场景 → 生成（未配置 Key 时会明确报错）；
+   每张结果可单独下载；刷新页面后自动恢复最近一次生成结果
 5. **组合卖点图**：选择模板与素材 → 创建布局 → 画布内拖动/缩放/双击编辑文字/替换图片 → 导出 PNG
 6. 当前商品、任务选项、最近主图结果与拼图编辑状态会在刷新后恢复；不同商品的素材和任务完全隔离
 
@@ -53,7 +54,7 @@ src/
   core/         # 纯 TS 契约：workspaces / assets / tasks / results / templates
   features/     # UI 功能模块：workspaces / workbench / assets / hero / collage / detail
   editor/       # 浏览器端 Fabric 适配：document / canvas / render / export
-  server/       # 服务端：assets / tasks / image(sharp) / providers / storage(fs)
+  server/       # 服务端：workspaces / assets / tasks / image(sharp) / providers / storage(fs)
 templates/
   collage/      # 3 套拼图模板 JSON（left-hero-right-three / top-hero-bottom-three / four-grid）
   detail/       # V2 阶段保留

@@ -66,7 +66,7 @@ export class AliyunQwenImageProvider implements ImageProvider {
       },
       parameters: {
         n: input.count,
-        prompt_extend: true,
+        prompt_extend: false,
         size: input.size,
       },
     };

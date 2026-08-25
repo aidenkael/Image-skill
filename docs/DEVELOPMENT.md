@@ -29,7 +29,8 @@ SHEIN 类电商商品视觉工作台：卖家上传真实商品图，选择任�
 - 活动商品 ID 保存在 `localStorage` 的 `image-skill.active-workspace`；素材、任务、草稿和输出按 Workspace 隔离。
 - 任务切换保留各自状态；detail / optimize 必须保持"后续阶段"可见状态，不得静默调用 hero。
 - UI 不暴露 prompt、模型 id、Provider 内部或 Agent 概念。
-- 上传支持拖拽；资源角色可修正；商品草稿以 400ms 防抖持久化；刷新后恢复最近一次 hero 任务结果与拼图编辑状态。
+- 上传支持拖拽；资源角色可修正；商品草稿以 400ms 防抖持久化；刷新后恢复最近一次 hero 任务结果与拼图编辑状态；
+  hero 每张结果提供同源下载；生成数量不完整（少于请求数）即整体失败，不以部分结果冒充成功。
 
 ## 4. 模块边界（强制）
 
@@ -54,7 +55,7 @@ src/
   components/  ui/（预留）
   core/  workspaces.ts, assets.ts, tasks.ts, results.ts, templates.ts
   editor/  fabric/ (canvas.ts, document.ts, render.ts, export.ts)
-  server/  assets/service.ts, tasks/(service.ts, hero.ts, collage.ts),
+  server/  workspaces/service.ts, assets/service.ts, tasks/(service.ts, hero.ts, collage.ts),
             image/sharp.ts, providers/(image-provider.ts, aliyun-qwen-image.ts), storage/fs-store.ts
 templates/
   collage/  left-hero-right-three.json, top-hero-bottom-three.json, four-grid.json
@@ -95,6 +96,8 @@ templates/
 - hero 结果下载到 `.runtime/workspaces/<workspaceId>/outputs/<taskId>/`，通过客户端安全 URL 提供；
   不向客户端暴露本地绝对路径，不存 base64 图片体。
 - Provider 契约：`ImageProvider.generate({ imagePath, prompt, size, count })`。
+  hero 固定使用 `qwen-image-3.0-pro`，请求参数固定 `prompt_extend: false`（显式保真 prompt，不允许模型扩写）。
+- hero 结果数量必须等于请求数量，否则任务整体失败。
 - 未配置 `DASHSCOPE_API_KEY` 时返回明确配置错误，不伪造成功结果。
 
 ## 8. V1 开发顺序
@@ -104,7 +107,13 @@ templates/
 
 ## 9. 必要验证
 
-- `pnpm test --run`：Workspace 契约与路径隔离、任务校验、模板文档校验等定向测试。
+- `pnpm test --run`：定向测试（全部不消耗付费额度）：
+  - core 契约：任务校验（hero 单源/数量、collage 模板/数量、detail/optimize 拒绝）、
+    模板文档校验、结果客户端契约（只暴露 URL，不含本地路径）；
+  - provider 与 hero 任务：无 Key 配置错误、qwen-image-3.0-pro 请求体（n/size/prompt_extend=false）、
+    prompt 构造、返回数量不完整即失败（fetch 全部打桩）；
+  - collage 确定性：互异模板、slotIndex 映射、文本开关、方案切换保留编辑、零网络调用；
+  - 存储安全：Workspace 路径隔离、路径穿越拒绝、UUID 守卫。
 - `pnpm build`：类型检查 + 生产构建。
 - 手工冒烟：上传 4 张图 → 构建 left-hero-right-three → 改标题 → 导出 PNG →
   hero 无 Key 时明确报错。
