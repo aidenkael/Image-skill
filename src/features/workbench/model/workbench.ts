@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AssetRef, AssetRole } from '@/core/assets';
 import type {
   CollageTaskOptions,
@@ -8,13 +8,11 @@ import type {
   TaskKind,
   TaskRecord,
 } from '@/core/tasks';
-import { listAssets, uploadAssets, patchAssetRole } from '@/features/assets/model/api';
-import { listTasks, createTask } from '@/features/workbench/model/api';
-
-/**
- * 工作台前端状态（单页面应用，无 Redux/Zustand）。
- * 任务切换时各自维护 hero/collage 专属选项，互不覆盖。
- */
+import type { TemplateDocument } from '@/core/templates';
+import { WorkspaceDraftSchema } from '@/core/workspaces';
+import { listAssets, patchAssetRole, uploadAssets } from '@/features/assets/model/api';
+import { createTask, listTasks } from '@/features/workbench/model/api';
+import { getWorkspaceDraft, saveWorkspaceDraft } from '@/features/workspaces/model/api';
 
 export interface WorkbenchModel {
   assets: AssetRef[];
@@ -24,8 +22,11 @@ export interface WorkbenchModel {
   heroCount: number;
   collageOptions: CollageTaskOptions;
   collageCount: number;
+  collageVariants: TemplateDocument[];
+  activeCollageVariant: number;
   tasks: TaskRecord[];
   latestHeroTask: TaskRecord | null;
+  hydrated: boolean;
   busy: boolean;
   error: string | null;
   notice: string | null;
@@ -39,112 +40,232 @@ export interface WorkbenchModel {
   setHeroCount(n: number): void;
   patchCollageOptions(patch: Partial<CollageTaskOptions>): void;
   setCollageCount(n: number): void;
+  setCollageVariants(variants: TemplateDocument[]): void;
+  setActiveCollageVariant(index: number): void;
+  replaceActiveCollageVariant(doc: TemplateDocument): void;
   runHero(): Promise<TaskRecord | null>;
   createCollageTask(): Promise<TaskRecord | null>;
   setNotice(message: string): void;
   clearStatus(): void;
 }
 
-const DEFAULT_HERO_OPTIONS: HeroTaskOptions = {
-  sourceAssetId: '',
-  ratio: '1:1',
-  person: 'auto',
-  sceneMode: 'auto',
-};
+const EMPTY_DRAFT = WorkspaceDraftSchema.parse({});
 
-const DEFAULT_COLLAGE_OPTIONS: CollageTaskOptions = {
-  templateId: 'left-hero-right-three',
-  includeTitle: true,
-  title: '',
-  includeSellingPoints: true,
-  sellingPoints: ['', '', ''],
-};
-
-export function useWorkbench(): WorkbenchModel {
+export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const [assets, setAssets] = useState<AssetRef[]>([]);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
-  const [kind, setKindState] = useState<TaskKind>('hero');
-  const [heroOptions, setHeroOptionsState] = useState<HeroTaskOptions>(DEFAULT_HERO_OPTIONS);
-  const [heroCount, setHeroCountState] = useState(1);
+  const [kind, setKindState] = useState<TaskKind>(EMPTY_DRAFT.kind);
+  const [heroOptions, setHeroOptionsState] = useState<HeroTaskOptions>(EMPTY_DRAFT.heroOptions);
+  const [heroCount, setHeroCountState] = useState(EMPTY_DRAFT.heroCount);
   const [collageOptions, setCollageOptionsState] =
-    useState<CollageTaskOptions>(DEFAULT_COLLAGE_OPTIONS);
-  const [collageCount, setCollageCountState] = useState(1);
+    useState<CollageTaskOptions>(EMPTY_DRAFT.collageOptions);
+  const [collageCount, setCollageCountState] = useState(EMPTY_DRAFT.collageCount);
+  const [collageVariants, setCollageVariantsState] = useState<TemplateDocument[]>([]);
+  const [activeCollageVariant, setActiveCollageVariantState] = useState(0);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [latestHeroTask, setLatestHeroTask] = useState<TaskRecord | null>(null);
+  const [latestHeroTaskId, setLatestHeroTaskId] = useState<string | null>(null);
+  const [hydratedWorkspaceId, setHydratedWorkspaceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const requestVersionRef = useRef(0);
+  const activeWorkspaceRef = useRef<string | null>(workspaceId);
+  const hydratedWorkspaceRef = useRef<string | null>(hydratedWorkspaceId);
+  activeWorkspaceRef.current = workspaceId;
+  hydratedWorkspaceRef.current = hydratedWorkspaceId;
 
-  const refreshAll = useCallback(async () => {
+  useEffect(() => {
+    const version = ++requestVersionRef.current;
+    let ignore = false;
+
+    setAssets([]);
+    setSelectedAssetIds([]);
+    setKindState(EMPTY_DRAFT.kind);
+    setHeroOptionsState(EMPTY_DRAFT.heroOptions);
+    setHeroCountState(EMPTY_DRAFT.heroCount);
+    setCollageOptionsState(EMPTY_DRAFT.collageOptions);
+    setCollageCountState(EMPTY_DRAFT.collageCount);
+    setCollageVariantsState([]);
+    setActiveCollageVariantState(0);
+    setTasks([]);
+    setLatestHeroTask(null);
+    setLatestHeroTaskId(null);
+    setHydratedWorkspaceId(null);
+    setBusy(false);
+    setError(null);
+    setNotice(null);
+
+    if (!workspaceId) return () => undefined;
+
+    void Promise.all([
+      listAssets(workspaceId),
+      listTasks(workspaceId),
+      getWorkspaceDraft(workspaceId),
+    ])
+      .then(([assetList, taskList, draft]) => {
+        if (ignore || requestVersionRef.current !== version) return;
+        const assetIds = new Set(assetList.map((asset) => asset.id));
+        const selectedIds = draft.selectedAssetIds.filter((id) => assetIds.has(id));
+        const restoredHeroOptions = {
+          ...draft.heroOptions,
+          sourceAssetId: assetIds.has(draft.heroOptions.sourceAssetId)
+            ? draft.heroOptions.sourceAssetId
+            : '',
+        };
+        const savedHeroTask = draft.latestHeroTaskId
+          ? taskList.find(
+              (task) => task.id === draft.latestHeroTaskId && task.request.kind === 'hero',
+            )
+          : null;
+        const fallbackHeroTask = taskList.find((task) => task.request.kind === 'hero') ?? null;
+        const restoredHeroTask = savedHeroTask ?? fallbackHeroTask;
+        const activeVariant =
+          draft.collageVariants.length === 0
+            ? 0
+            : Math.min(draft.activeCollageVariant, draft.collageVariants.length - 1);
+
+        setAssets(assetList);
+        setTasks(taskList);
+        setSelectedAssetIds(selectedIds);
+        setKindState(draft.kind);
+        setHeroOptionsState(restoredHeroOptions);
+        setHeroCountState(draft.heroCount);
+        setCollageOptionsState(draft.collageOptions);
+        setCollageCountState(draft.collageCount);
+        setCollageVariantsState(draft.collageVariants);
+        setActiveCollageVariantState(activeVariant);
+        setLatestHeroTask(restoredHeroTask);
+        setLatestHeroTaskId(restoredHeroTask?.id ?? null);
+        setHydratedWorkspaceId(workspaceId);
+      })
+      .catch((reason: unknown) => {
+        if (!ignore && requestVersionRef.current === version) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [workspaceId]);
+
+  const hydrated = workspaceId !== null && hydratedWorkspaceId === workspaceId;
+
+  useEffect(() => {
+    if (!workspaceId || !hydrated) return;
+    const draft = WorkspaceDraftSchema.parse({
+      kind,
+      selectedAssetIds,
+      heroOptions,
+      heroCount,
+      collageOptions,
+      collageCount,
+      collageVariants,
+      activeCollageVariant,
+      latestHeroTaskId,
+    });
+    const timer = window.setTimeout(() => {
+      void saveWorkspaceDraft(workspaceId, draft).catch((reason: unknown) => {
+        if (activeWorkspaceRef.current === workspaceId) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [
+    workspaceId,
+    hydrated,
+    kind,
+    selectedAssetIds,
+    heroOptions,
+    heroCount,
+    collageOptions,
+    collageCount,
+    collageVariants,
+    activeCollageVariant,
+    latestHeroTaskId,
+  ]);
+
+  const upload = useCallback(async (files: File[]) => {
+    const currentWorkspaceId = activeWorkspaceRef.current;
+    if (
+      !currentWorkspaceId ||
+      hydratedWorkspaceRef.current !== currentWorkspaceId ||
+      files.length === 0
+    ) return;
+    setBusy(true);
+    setError(null);
     try {
-      const [assetList, taskList] = await Promise.all([listAssets(), listTasks()]);
-      setAssets(assetList);
-      setTasks(taskList);
-      setSelectedAssetIds((prev) =>
-        prev.filter((id) => assetList.some((a) => a.id === id)),
+      const created = await uploadAssets(currentWorkspaceId, files);
+      if (activeWorkspaceRef.current !== currentWorkspaceId) return;
+      setAssets((current) => [...created, ...current]);
+      setSelectedAssetIds((current) =>
+        [...new Set([...current, ...created.map((asset) => asset.id)])].slice(0, 9),
       );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setNotice(`已上传 ${created.length} 张图片`);
+    } catch (reason) {
+      if (activeWorkspaceRef.current === currentWorkspaceId) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    } finally {
+      if (activeWorkspaceRef.current === currentWorkspaceId) setBusy(false);
     }
   }, []);
 
-  useEffect(() => {
-    void refreshAll();
-  }, [refreshAll]);
-
-  const upload = useCallback(
-    async (files: File[]) => {
-      if (files.length === 0) return;
-      setBusy(true);
-      setError(null);
-      try {
-        const created = await uploadAssets(files);
-        setAssets((prev) => [...created, ...prev]);
-        setSelectedAssetIds((prev) => [
-          ...new Set([...prev, ...created.map((a) => a.id)]),
-        ]);
-        setNotice(`已上传 ${created.length} 张图片`);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
-
   const toggleAsset = useCallback((id: string) => {
-    setSelectedAssetIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
+    setSelectedAssetIds((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id);
+      if (current.length >= 9) {
+        setError('单个商品最多选择 9 张图片');
+        return current;
+      }
+      return [...current, id];
+    });
   }, []);
 
   const clearSelection = useCallback(() => setSelectedAssetIds([]), []);
 
   const setRole = useCallback(async (id: string, role: AssetRole) => {
+    const currentWorkspaceId = activeWorkspaceRef.current;
+    if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return;
     try {
-      const updated = await patchAssetRole(id, role);
-      setAssets((prev) => prev.map((a) => (a.id === id ? updated : a)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const updated = await patchAssetRole(currentWorkspaceId, id, role);
+      if (activeWorkspaceRef.current !== currentWorkspaceId) return;
+      setAssets((current) => current.map((asset) => (asset.id === id ? updated : asset)));
+    } catch (reason) {
+      if (activeWorkspaceRef.current === currentWorkspaceId) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
     }
   }, []);
 
-  const setKind = useCallback((k: TaskKind) => {
-    setKindState(k);
+  const setKind = useCallback((nextKind: TaskKind) => {
+    setKindState(nextKind);
     setError(null);
     setNotice(null);
   }, []);
 
   const patchHeroOptions = useCallback((patch: Partial<HeroTaskOptions>) => {
-    setHeroOptionsState((prev) => ({ ...prev, ...patch }));
+    setHeroOptionsState((current) => ({ ...current, ...patch }));
   }, []);
 
   const patchCollageOptions = useCallback((patch: Partial<CollageTaskOptions>) => {
-    setCollageOptionsState((prev) => ({ ...prev, ...patch }));
+    setCollageOptionsState((current) => ({ ...current, ...patch }));
   }, []);
 
+  const replaceActiveCollageVariant = useCallback(
+    (doc: TemplateDocument) => {
+      setCollageVariantsState((current) =>
+        current.map((variant, index) => (index === activeCollageVariant ? doc : variant)),
+      );
+    },
+    [activeCollageVariant],
+  );
+
   const runHero = useCallback(async (): Promise<TaskRecord | null> => {
+    const currentWorkspaceId = activeWorkspaceRef.current;
+    if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return null;
     const sourceAssetId = heroOptions.sourceAssetId;
     if (!sourceAssetId || !assets.some((asset) => asset.id === sourceAssetId)) {
       setError('请在右侧明确选择一张源商品图片');
@@ -154,30 +275,36 @@ export function useWorkbench(): WorkbenchModel {
     setError(null);
     setNotice(null);
     try {
-      const task = await createTask({
+      const task = await createTask(currentWorkspaceId, {
         kind: 'hero',
         assetIds: [sourceAssetId],
         count: heroCount,
         options: heroOptions,
       });
-      setLatestHeroTask(task);
-      setTasks(await listTasks());
+      const taskList = await listTasks(currentWorkspaceId);
+      if (activeWorkspaceRef.current !== currentWorkspaceId) return null;
+      setTasks(taskList);
       if (task.status === 'failed') {
         setError(task.error ?? '生成失败');
       } else if (task.status === 'succeeded') {
-        const n = task.result?.outputs.length ?? 0;
-        setNotice(`氛围主图生成完成，共 ${n} 张`);
+        setLatestHeroTask(task);
+        setLatestHeroTaskId(task.id);
+        setNotice(`氛围主图生成完成，共 ${task.result?.outputs.length ?? 0} 张`);
       }
       return task;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+    } catch (reason) {
+      if (activeWorkspaceRef.current === currentWorkspaceId) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
       return null;
     } finally {
-      setBusy(false);
+      if (activeWorkspaceRef.current === currentWorkspaceId) setBusy(false);
     }
   }, [assets, heroCount, heroOptions]);
 
   const createCollageTask = useCallback(async (): Promise<TaskRecord | null> => {
+    const currentWorkspaceId = activeWorkspaceRef.current;
+    if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return null;
     if (selectedAssetIds.length === 0) {
       setError('请先在左侧选择商品图片');
       return null;
@@ -186,25 +313,29 @@ export function useWorkbench(): WorkbenchModel {
     setError(null);
     setNotice(null);
     try {
-      const task = await createTask({
+      const task = await createTask(currentWorkspaceId, {
         kind: 'collage',
         assetIds: selectedAssetIds,
         count: collageCount,
         options: collageOptions,
       });
-      setTasks(await listTasks());
+      const taskList = await listTasks(currentWorkspaceId);
+      if (activeWorkspaceRef.current !== currentWorkspaceId) return null;
+      setTasks(taskList);
       if (task.status === 'failed') {
         setError(task.error ?? '布局创建失败');
         return null;
       }
       return task;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+    } catch (reason) {
+      if (activeWorkspaceRef.current === currentWorkspaceId) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
       return null;
     } finally {
-      setBusy(false);
+      if (activeWorkspaceRef.current === currentWorkspaceId) setBusy(false);
     }
-  }, [selectedAssetIds, collageCount, collageOptions]);
+  }, [collageCount, collageOptions, selectedAssetIds]);
 
   const clearStatus = useCallback(() => {
     setError(null);
@@ -217,16 +348,19 @@ export function useWorkbench(): WorkbenchModel {
   }, []);
 
   return {
-    assets,
-    selectedAssetIds,
-    kind,
-    heroOptions,
-    heroCount,
-    collageOptions,
-    collageCount,
-    tasks,
-    latestHeroTask,
-    busy,
+    assets: hydrated ? assets : [],
+    selectedAssetIds: hydrated ? selectedAssetIds : [],
+    kind: hydrated ? kind : EMPTY_DRAFT.kind,
+    heroOptions: hydrated ? heroOptions : EMPTY_DRAFT.heroOptions,
+    heroCount: hydrated ? heroCount : EMPTY_DRAFT.heroCount,
+    collageOptions: hydrated ? collageOptions : EMPTY_DRAFT.collageOptions,
+    collageCount: hydrated ? collageCount : EMPTY_DRAFT.collageCount,
+    collageVariants: hydrated ? collageVariants : [],
+    activeCollageVariant: hydrated ? activeCollageVariant : 0,
+    tasks: hydrated ? tasks : [],
+    latestHeroTask: hydrated ? latestHeroTask : null,
+    hydrated,
+    busy: busy || (workspaceId !== null && !hydrated),
     error,
     notice,
     upload,
@@ -238,6 +372,9 @@ export function useWorkbench(): WorkbenchModel {
     setHeroCount: setHeroCountState,
     patchCollageOptions,
     setCollageCount: setCollageCountState,
+    setCollageVariants: setCollageVariantsState,
+    setActiveCollageVariant: setActiveCollageVariantState,
+    replaceActiveCollageVariant,
     runHero,
     createCollageTask,
     setNotice: setNoticeMessage,

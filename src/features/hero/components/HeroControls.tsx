@@ -10,6 +10,7 @@ import type { HeroTaskOptions } from '@/core/tasks';
  */
 
 interface HeroControlsProps {
+  workspaceId: string;
   options: HeroTaskOptions;
   assets: AssetRef[];
   count: number;
@@ -33,6 +34,7 @@ const PERSONS: Array<{ value: HeroTaskOptions['person']; label: string }> = [
 ];
 
 export function HeroControls({
+  workspaceId,
   options,
   assets,
   count,
@@ -64,7 +66,7 @@ export function HeroControls({
         </select>
         {sourceAsset ? (
           <div className="hero-source-preview">
-            <img src={assetUrl(sourceAsset.id, 'thumb')} alt={sourceAsset.name} />
+            <img src={assetUrl(workspaceId, sourceAsset.id, 'thumb')} alt={sourceAsset.name} />
             <span>{sourceAsset.name}</span>
           </div>
         ) : null}

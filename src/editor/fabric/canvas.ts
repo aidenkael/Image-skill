@@ -22,6 +22,7 @@ export async function createEditorCanvas(
   container: HTMLElement,
   doc: TemplateDocument,
   getAssetSrc: (assetId: string) => string,
+  onDocumentChange?: (layers: EditorLayer[]) => void,
 ): Promise<EditorCanvasController> {
   const fabric = await import('@fabricjs/browser');
   const canvasEl = document.createElement('canvas');
@@ -39,6 +40,12 @@ export async function createEditorCanvas(
     canvas.add(object as never);
   }
   canvas.requestRenderAll();
+
+  const emitDocumentChange = () => {
+    onDocumentChange?.(serializeDocument(canvas));
+  };
+  canvas.on('object:modified', emitDocumentChange);
+  canvas.on('text:changed', emitDocumentChange);
 
   return {
     async replaceSlotImage(layerId: string, src: string, assetId: string) {
@@ -70,6 +77,7 @@ export async function createEditorCanvas(
       meta.slot = slot;
       canvas.insertAt(index, img as never);
       canvas.requestRenderAll();
+      emitDocumentChange();
     },
 
     getDocument: () => serializeDocument(canvas),

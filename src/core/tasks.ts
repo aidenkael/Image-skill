@@ -61,7 +61,8 @@ export const CreateTaskRequestSchema = z.object({
 export type CreateTaskRequest = z.infer<typeof CreateTaskRequestSchema>;
 
 export const TaskRecordSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().uuid(),
+  workspaceId: z.string().uuid(),
   request: CreateTaskRequestSchema,
   status: TaskStatusSchema,
   result: TaskResultSchema.optional(),

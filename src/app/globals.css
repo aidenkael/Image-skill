@@ -36,6 +36,8 @@ button {
   background: #111827;
   color: #fff;
   flex: 0 0 auto;
+  position: relative;
+  z-index: 10;
 }
 
 .app-brand {
@@ -47,6 +49,7 @@ button {
 .task-tabs {
   display: flex;
   gap: 4px;
+  margin-left: auto;
 }
 
 .tab {
@@ -69,6 +72,91 @@ button {
   background: #374151;
 }
 
+.tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.workspace-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  position: relative;
+}
+
+.workspace-current {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.workspace-select,
+.workspace-name-input {
+  border: 1px solid #4b5563;
+  border-radius: 7px;
+  background: #1f2937;
+  color: #fff;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.workspace-select {
+  max-width: 160px;
+}
+
+.workspace-create-button,
+.workspace-confirm-button {
+  border: 1px solid #4b5563;
+  border-radius: 7px;
+  background: transparent;
+  color: #fff;
+  padding: 6px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workspace-create-form {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 9px;
+  background: #111827;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.workspace-name-input {
+  width: 190px;
+}
+
+.workspace-confirm-button {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.workspace-confirm-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.workspace-error {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 100%;
+  color: #fecaca;
+  background: #7f1d1d;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
 .workbench-body {
   display: grid;
   grid-template-columns: 270px 1fr 330px;
@@ -76,6 +164,33 @@ button {
   padding: 12px;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.workspace-empty-body {
+  grid-template-columns: 1fr;
+}
+
+.workspace-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  text-align: center;
+  color: #6b7280;
+}
+
+.workspace-empty h1 {
+  margin: 0 0 8px;
+  color: #111827;
+  font-size: 22px;
+}
+
+.workspace-empty p {
+  margin: 0 0 18px;
 }
 
 /* ---------- 面板 ---------- */
@@ -276,6 +391,18 @@ button {
   width: 100%;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
+}
+
+.result-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-download {
+  align-self: flex-end;
+  text-decoration: none;
+  color: #111827;
 }
 
 .empty-canvas {

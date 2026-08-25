@@ -61,11 +61,12 @@ async function downloadImage(url: string): Promise<Buffer> {
 }
 
 export async function runHeroTask(
+  workspaceId: string,
   request: CreateTaskRequest,
   taskId: string,
 ): Promise<TaskResult> {
   const opts = request.options as HeroTaskOptions;
-  const source = await assetFile(opts.sourceAssetId, 'original');
+  const source = await assetFile(workspaceId, opts.sourceAssetId, 'original');
   if (!source) throw new Error('源商品图片不存在或已被删除');
 
   const provider = new AliyunQwenImageProvider();
@@ -76,7 +77,7 @@ export async function runHeroTask(
     count: request.count,
   });
 
-  const outDir = await ensureDir('outputs', taskId);
+  const outDir = await ensureDir('workspaces', workspaceId, 'outputs', taskId);
   const outputs: TaskResult['outputs'] = [];
   let idx = 0;
   for (const g of generated) {
@@ -88,7 +89,7 @@ export async function runHeroTask(
     const fileName = `result-${String(idx + 1).padStart(2, '0')}.${ext}`;
     const localPath = path.join(outDir, fileName);
     await fs.writeFile(localPath, buf);
-    outputs.push({ kind: 'image', url: taskOutputUrl(taskId, fileName) });
+    outputs.push({ kind: 'image', url: taskOutputUrl(workspaceId, taskId, fileName) });
     idx += 1;
   }
   if (outputs.length === 0) throw new Error('模型未返回可用的生成结果');

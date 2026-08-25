@@ -11,14 +11,13 @@ import {
 } from '@/core/assets';
 import { readImageMeta, makeThumbnail } from '@/server/image/sharp';
 import {
-  runtimePath,
   writeBuffer,
   writeJson,
   readJson,
   readBuffer,
-  ensureDir,
   UUID_RE,
 } from '@/server/storage/fs-store';
+import { workspaceRuntimePath } from '@/server/workspaces/service';
 
 /**
  * 资源（商品图）服务：上传校验、原图/缩略图落盘、小 JSON 元数据持久化。
@@ -63,7 +62,7 @@ function sniffMime(fileName: string, buffer: Buffer): AssetMimeType | null {
   return null;
 }
 
-export async function saveAsset(file: UploadedAssetFile): Promise<AssetRef> {
+export async function saveAsset(workspaceId: string, file: UploadedAssetFile): Promise<AssetRef> {
   if (!file.buffer || file.buffer.length === 0) throw new AssetValidationError('上传文件为空');
   if (file.buffer.length > MAX_ASSET_BYTES) {
     throw new AssetValidationError(
@@ -85,11 +84,9 @@ export async function saveAsset(file: UploadedAssetFile): Promise<AssetRef> {
 
   const id = crypto.randomUUID();
   const ext = EXT_BY_MIME[mime];
-  const dir = `assets/${id}`;
-  await ensureDir(dir);
-  await writeBuffer(runtimePath(dir, `original.${ext}`), file.buffer);
+  await writeBuffer(workspaceRuntimePath(workspaceId, 'assets', id, `original.${ext}`), file.buffer);
   const thumb = await makeThumbnail(file.buffer, 320);
-  await writeBuffer(runtimePath(dir, 'thumb.png'), thumb);
+  await writeBuffer(workspaceRuntimePath(workspaceId, 'assets', id, 'thumb.png'), thumb);
 
   const asset: AssetRef = {
     id,
@@ -100,43 +97,49 @@ export async function saveAsset(file: UploadedAssetFile): Promise<AssetRef> {
     role: 'unknown',
     createdAt: new Date().toISOString(),
   };
-  await writeJson(runtimePath(dir, 'asset.json'), asset);
+  await writeJson(workspaceRuntimePath(workspaceId, 'assets', id, 'asset.json'), asset);
   return asset;
 }
 
-export async function getAsset(id: string): Promise<AssetRef | null> {
+export async function getAsset(workspaceId: string, id: string): Promise<AssetRef | null> {
   assertSafeId(id);
-  return readJson<AssetRef>(runtimePath('assets', id, 'asset.json'));
+  return readJson<AssetRef>(workspaceRuntimePath(workspaceId, 'assets', id, 'asset.json'));
 }
 
-export async function listAssets(): Promise<AssetRef[]> {
-  const dir = runtimePath('assets');
+export async function listAssets(workspaceId: string): Promise<AssetRef[]> {
+  const dir = workspaceRuntimePath(workspaceId, 'assets');
   const names = await fs.readdir(dir).catch(() => []);
   const assets: AssetRef[] = [];
   for (const name of names) {
     if (!UUID_RE.test(name)) continue;
-    const asset = await readJson<AssetRef>(runtimePath('assets', name, 'asset.json'));
+    const asset = await readJson<AssetRef>(
+      workspaceRuntimePath(workspaceId, 'assets', name, 'asset.json'),
+    );
     if (asset) assets.push(asset);
   }
   return assets.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export async function setAssetRole(id: string, role: AssetRole): Promise<AssetRef | null> {
+export async function setAssetRole(
+  workspaceId: string,
+  id: string,
+  role: AssetRole,
+): Promise<AssetRef | null> {
   assertSafeId(id);
-  const asset = await getAsset(id);
+  const asset = await getAsset(workspaceId, id);
   if (!asset) return null;
   const next: AssetRef = { ...asset, role };
-  await writeJson(runtimePath('assets', id, 'asset.json'), next);
+  await writeJson(workspaceRuntimePath(workspaceId, 'assets', id, 'asset.json'), next);
   return next;
 }
 
 /** 约定：第一个上传的资源自动设为 primary（资源角色可被用户修正） */
-export async function ensurePrimaryAsset(): Promise<void> {
-  const all = await listAssets();
+export async function ensurePrimaryAsset(workspaceId: string): Promise<void> {
+  const all = await listAssets(workspaceId);
   if (all.length === 0) return;
   const hasPrimary = all.some((a) => a.role === 'primary');
   if (!hasPrimary) {
-    await setAssetRole(all[all.length - 1].id, 'primary');
+    await setAssetRole(workspaceId, all[all.length - 1].id, 'primary');
   }
 }
 
@@ -147,17 +150,18 @@ export interface AssetFileResult {
 }
 
 export async function assetFile(
+  workspaceId: string,
   id: string,
   variant: 'original' | 'thumb',
 ): Promise<AssetFileResult | null> {
   assertSafeId(id);
-  const asset = await getAsset(id);
+  const asset = await getAsset(workspaceId, id);
   if (!asset) return null;
   const ext = EXT_BY_MIME[asset.mimeType];
   const filePath =
     variant === 'thumb'
-      ? runtimePath('assets', id, 'thumb.png')
-      : runtimePath('assets', id, `original.${ext}`);
+      ? workspaceRuntimePath(workspaceId, 'assets', id, 'thumb.png')
+      : workspaceRuntimePath(workspaceId, 'assets', id, `original.${ext}`);
   const buffer = await readBuffer(filePath);
   if (!buffer) return null;
   return {

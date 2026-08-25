@@ -14,12 +14,16 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function listTasks(): Promise<TaskRecord[]> {
-  return (await json<{ tasks: TaskRecord[] }>(await fetch('/api/tasks'))).tasks;
+export async function listTasks(workspaceId: string): Promise<TaskRecord[]> {
+  const url = `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`;
+  return (await json<{ tasks: TaskRecord[] }>(await fetch(url))).tasks;
 }
 
-export async function createTask(request: CreateTaskRequest): Promise<TaskRecord> {
-  const res = await fetch('/api/tasks', {
+export async function createTask(
+  workspaceId: string,
+  request: CreateTaskRequest,
+): Promise<TaskRecord> {
+  const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

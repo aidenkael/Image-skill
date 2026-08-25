@@ -2,6 +2,7 @@
 
 import type { RefObject } from 'react';
 import type { TaskRecord } from '@/core/tasks';
+import type { TemplateDocument } from '@/core/templates';
 import { CollageEditor, CollageEditorHandle } from '@/features/collage/components/CollageEditor';
 
 /**
@@ -11,21 +12,25 @@ import { CollageEditor, CollageEditorHandle } from '@/features/collage/component
  */
 
 interface CanvasAreaProps {
+  workspaceId: string;
   kind: 'hero' | 'collage';
   latestHeroTask: TaskRecord | null;
   collageEditorRef: RefObject<CollageEditorHandle | null>;
   collageVariantCount?: number;
   activeCollageVariant?: number;
   onSelectCollageVariant?(index: number): void;
+  onCollageDocumentChange?(doc: TemplateDocument): void;
 }
 
 export function CanvasArea({
+  workspaceId,
   kind,
   latestHeroTask,
   collageEditorRef,
   collageVariantCount = 0,
   activeCollageVariant = 0,
   onSelectCollageVariant,
+  onCollageDocumentChange,
 }: CanvasAreaProps) {
   if (kind === 'collage') {
     return (
@@ -48,7 +53,11 @@ export function CanvasArea({
           </div>
         ) : null}
         <div className="canvas-scroll">
-          <CollageEditor ref={collageEditorRef} />
+          <CollageEditor
+            ref={collageEditorRef}
+            workspaceId={workspaceId}
+            onDocumentChange={onCollageDocumentChange}
+          />
         </div>
       </section>
     );
@@ -75,12 +84,20 @@ export function CanvasArea({
       {images.length > 0 ? (
         <div className="result-grid">
           {images.map((img, i) => (
-            <img
-              key={`${img.url}-${i}`}
-              src={img.url}
-              alt={`生成结果 ${i + 1}`}
-              className="result-img"
-            />
+            <div key={`${img.url}-${i}`} className="result-card">
+              <img
+                src={img.url}
+                alt={`生成结果 ${i + 1}`}
+                className="result-img"
+              />
+              <a
+                className="btn result-download"
+                href={img.url}
+                download={`hero-result-${i + 1}`}
+              >
+                下载
+              </a>
+            </div>
           ))}
         </div>
       ) : (

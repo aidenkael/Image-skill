@@ -10,6 +10,7 @@ import { assetUrl } from '@/core/results';
  */
 
 interface AssetPanelProps {
+  workspaceId: string;
   assets: AssetRef[];
   selectedIds: string[];
   busy: boolean;
@@ -19,6 +20,7 @@ interface AssetPanelProps {
 }
 
 export function AssetPanel({
+  workspaceId,
   assets,
   selectedIds,
   busy,
@@ -52,7 +54,9 @@ export function AssetPanel({
           e.preventDefault();
           handleFiles(e.dataTransfer.files);
         }}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => {
+          if (!busy) inputRef.current?.click();
+        }}
       >
         {busy ? '上传中…' : '拖拽图片到此处，或点击选择（JPEG/PNG/WebP）'}
         <input
@@ -60,6 +64,7 @@ export function AssetPanel({
           type="file"
           accept="image/jpeg,image/png,image/webp"
           multiple
+          disabled={busy}
           hidden
           onChange={(e) => {
             handleFiles(e.target.files);
@@ -80,7 +85,7 @@ export function AssetPanel({
               title={asset.name}
             >
               <img
-                src={assetUrl(asset.id, 'thumb')}
+                src={assetUrl(workspaceId, asset.id, 'thumb')}
                 alt={asset.name}
                 loading="lazy"
                 className="asset-thumb"

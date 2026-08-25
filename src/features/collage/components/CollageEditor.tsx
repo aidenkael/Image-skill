@@ -4,6 +4,7 @@ import type { TemplateDocument } from '@/core/templates';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { createEditorCanvas, EditorCanvasController } from '@/editor/fabric/canvas';
 import { downloadBlob } from '@/editor/fabric/export';
+import { assetUrl } from '@/core/results';
 
 /**
  * 拼图画布（浏览器端 Fabric 编辑器宿主）。
@@ -17,10 +18,23 @@ export interface CollageEditorHandle {
   replaceSlotImage(layerId: string, src: string, assetId: string): Promise<void>;
 }
 
-export const CollageEditor = forwardRef<CollageEditorHandle>(function CollageEditor(_props, ref) {
+interface CollageEditorProps {
+  workspaceId: string;
+  onDocumentChange?(doc: TemplateDocument): void;
+}
+
+export const CollageEditor = forwardRef<CollageEditorHandle, CollageEditorProps>(function CollageEditor(
+  { workspaceId, onDocumentChange },
+  ref,
+) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<EditorCanvasController | null>(null);
   const documentRef = useRef<TemplateDocument | null>(null);
+  const layoutVersionRef = useRef(0);
+  const workspaceIdRef = useRef(workspaceId);
+  const onDocumentChangeRef = useRef(onDocumentChange);
+  workspaceIdRef.current = workspaceId;
+  onDocumentChangeRef.current = onDocumentChange;
 
   useImperativeHandle(
     ref,
@@ -28,17 +42,30 @@ export const CollageEditor = forwardRef<CollageEditorHandle>(function CollageEdi
       async createLayout(doc: TemplateDocument) {
         const host = hostRef.current;
         if (!host) return;
+        const version = ++layoutVersionRef.current;
         controllerRef.current?.dispose();
         controllerRef.current = null;
         host.innerHTML = '';
         host.style.width = `${doc.width}px`;
         host.style.height = `${doc.height}px`;
-        controllerRef.current = await createEditorCanvas(
+        documentRef.current = doc;
+        const controller = await createEditorCanvas(
           host,
           doc,
-          (assetId) => `/api/assets/${assetId}`,
+          (assetId) => assetUrl(workspaceIdRef.current, assetId),
+          (layers) => {
+            const current = documentRef.current;
+            if (!current) return;
+            const next = { ...current, layers };
+            documentRef.current = next;
+            onDocumentChangeRef.current?.(next);
+          },
         );
-        documentRef.current = doc;
+        if (layoutVersionRef.current !== version) {
+          controller.dispose();
+          return;
+        }
+        controllerRef.current = controller;
       },
       getDocument() {
         const doc = documentRef.current;
@@ -63,6 +90,7 @@ export const CollageEditor = forwardRef<CollageEditorHandle>(function CollageEdi
 
   useEffect(
     () => () => {
+      layoutVersionRef.current += 1;
       controllerRef.current?.dispose();
       controllerRef.current = null;
       documentRef.current = null;

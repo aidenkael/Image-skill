@@ -32,32 +32,43 @@ cp .env.example .env   # 至少填写 DASHSCOPE_API_KEY
 pnpm dev              # http://localhost:3000
 
 # 4. 验证
-pnpm test --run       # 定向测试：任务校验 + 模板文档校验
+pnpm test --run       # 定向测试：Workspace / 任务 / 模板契约与路径隔离
 pnpm build            # 类型检查 + 生产构建
 ```
 
 ## 使用流程
 
-1. **上传商品图**（左侧面板，支持拖拽，JPEG/PNG/WebP，≤20MB）
-2. **切换任务**（顶部：氛围主图 / 组合卖点图 / 详情页图 / 简单优化）
-3. **氛围主图**：选择源图 → 输出数量 / 比例 / 人物 / 场景 → 生成（未配置 Key 时会明确报错）
-4. **组合卖点图**：选择模板与素材 → 创建布局 → 画布内拖动/缩放/双击编辑文字/替换图片 → 导出 PNG
-5. 生成结果与会话内已上传资源在当前会话保持可见
+1. **新建或选择商品**（一个商品对应一个独立 Workspace，新建时必须输入名称）
+2. **上传商品图**（左侧面板，支持拖拽，JPEG/PNG/WebP，≤20MB）
+3. **切换任务**（顶部：氛围主图 / 组合卖点图 / 详情页图 / 简单优化）
+4. **氛围主图**：选择源图 → 输出数量 / 比例 / 人物 / 场景 → 生成（未配置 Key 时会明确报错）
+5. **组合卖点图**：选择模板与素材 → 创建布局 → 画布内拖动/缩放/双击编辑文字/替换图片 → 导出 PNG
+6. 当前商品、任务选项、最近主图结果与拼图编辑状态会在刷新后恢复；不同商品的素材和任务完全隔离
 
 ## 项目结构
 
 ```text
 src/
   app/          # 页面 + API 路由（薄适配层）
-  core/         # 纯 TS 契约：assets / tasks / results / templates
-  features/     # UI 功能模块：workbench / assets / hero / collage / detail
+  core/         # 纯 TS 契约：workspaces / assets / tasks / results / templates
+  features/     # UI 功能模块：workspaces / workbench / assets / hero / collage / detail
   editor/       # 浏览器端 Fabric 适配：document / canvas / render / export
   server/       # 服务端：assets / tasks / image(sharp) / providers / storage(fs)
 templates/
   collage/      # 3 套拼图模板 JSON（left-hero-right-three / top-hero-bottom-three / four-grid）
   detail/       # V2 阶段保留
-.runtime/       # 运行期文件（不入 Git）
+.runtime/
+  workspaces/<workspaceId>/
+    workspace.json
+    draft.json
+    assets/     # 当前商品的上传原图、缩略图和元数据
+    tasks/      # 当前商品的任务记录
+    outputs/    # 当前商品的 Hero 输出
 ```
+
+活动 API 均以商品工作区为作用域：`/api/workspaces`、
+`/api/workspaces/:workspaceId/draft`、`/api/workspaces/:workspaceId/assets` 与
+`/api/workspaces/:workspaceId/tasks`。旧的全局 `/api/assets`、`/api/tasks` 不再提供。
 
 ## 文档
 

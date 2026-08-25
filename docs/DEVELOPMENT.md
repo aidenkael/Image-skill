@@ -24,10 +24,12 @@ SHEIN 类电商商品视觉工作台：卖家上传真实商品图，选择任�
 
 ## 3. 人机交互
 
-- 单页工作台：左=资源面板，中=预览/编辑画布，右=当前任务控制，顶=任务切换。
+- 单页工作台：左=资源面板，中=预览/编辑画布，右=当前任务控制，顶=商品与任务切换。
+- 一个 Workspace 对应一个商品。新建商品必须由用户输入名称，不自动生成占位商品。
+- 活动商品 ID 保存在 `localStorage` 的 `image-skill.active-workspace`；素材、任务、草稿和输出按 Workspace 隔离。
 - 任务切换保留各自状态；detail / optimize 必须保持"后续阶段"可见状态，不得静默调用 hero。
 - UI 不暴露 prompt、模型 id、Provider 内部或 Agent 概念。
-- 上传支持拖拽；资源角色可修正；生成结果会话内保持可见。
+- 上传支持拖拽；资源角色可修正；商品草稿以 400ms 防抖持久化；刷新后恢复最近一次 hero 任务结果与拼图编辑状态。
 
 ## 4. 模块边界（强制）
 
@@ -47,17 +49,24 @@ SHEIN 类电商商品视觉工作台：卖家上传真实商品图，选择任�
 
 ```text
 src/
-  app/  page.tsx, api/assets(/, [id]), api/tasks(/, [id], [id]/outputs/[...path])
-  features/  workbench, assets, hero, collage, detail
+  app/  page.tsx, api/workspaces(/, [workspaceId]/draft|assets|tasks|outputs)
+  features/  workspaces, workbench, assets, hero, collage, detail
   components/  ui/（预留）
-  core/  assets.ts, tasks.ts, results.ts, templates.ts
+  core/  workspaces.ts, assets.ts, tasks.ts, results.ts, templates.ts
   editor/  fabric/ (canvas.ts, document.ts, render.ts, export.ts)
   server/  assets/service.ts, tasks/(service.ts, hero.ts, collage.ts),
             image/sharp.ts, providers/(image-provider.ts, aliyun-qwen-image.ts), storage/fs-store.ts
 templates/
   collage/  left-hero-right-three.json, top-hero-bottom-three.json, four-grid.json
   detail/   （V2 保留）
-.runtime/  assets/ outputs/ tasks/（不入 Git）
+.runtime/
+  workspaces/<workspaceId>/
+    workspace.json
+    draft.json
+    assets/<assetId>/
+    tasks/<taskId>.json
+    outputs/<taskId>/
+（全部不入 Git；旧的全局 assets/tasks/outputs 不再由活动代码读写）
 ```
 
 ## 6. 开源借用决策
@@ -75,22 +84,27 @@ templates/
 
 - `CreateTaskRequest { kind, assetIds[], count, options }`：所有单件操作都走该契约
   （未来批量调用方直接复用）。`count` 按类型校验：hero 1..4，collage 1..3 且 ≤ 模板数。
-- `TaskRecord { id, request, status, result?, error?, createdAt, updatedAt }`，落盘 `.runtime/tasks/`。
-- API：`POST/GET /api/assets`、`GET/PATCH /api/assets/:id`、
-  `POST/GET /api/tasks`、`GET /api/tasks/:id`、`GET /api/tasks/:id/outputs/[...path]`。
-- hero 结果下载到 `.runtime/outputs/<taskId>/`，通过客户端安全 URL 提供；
+- `TaskRecord { id, workspaceId, request, status, result?, error?, createdAt, updatedAt }`，落盘当前 Workspace 的 `tasks/`。
+- Workspace API：`GET/POST /api/workspaces`、`GET /api/workspaces/:workspaceId`、
+  `GET/PUT /api/workspaces/:workspaceId/draft`。
+- 资源 API：`GET/POST /api/workspaces/:workspaceId/assets`、
+  `GET/PATCH /api/workspaces/:workspaceId/assets/:assetId`。
+- 任务 API：`GET/POST /api/workspaces/:workspaceId/tasks`、
+  `GET /api/workspaces/:workspaceId/tasks/:taskId`、
+  `GET /api/workspaces/:workspaceId/tasks/:taskId/outputs/[...path]`。
+- hero 结果下载到 `.runtime/workspaces/<workspaceId>/outputs/<taskId>/`，通过客户端安全 URL 提供；
   不向客户端暴露本地绝对路径，不存 base64 图片体。
 - Provider 契约：`ImageProvider.generate({ imagePath, prompt, size, count })`。
 - 未配置 `DASHSCOPE_API_KEY` 时返回明确配置错误，不伪造成功结果。
 
 ## 8. V1 开发顺序
 
-1. core 契约（assets/tasks/results/templates）→ 2. server（存储/资源/任务/Provider）→
+1. core 契约（workspaces/assets/tasks/results/templates）→ 2. server（存储/资源/任务/Provider）→
 3. API 路由 → 4. 模板 JSON → 5. editor（Fabric 适配）→ 6. features UI → 7. 定向测试 → 8. 构建验证。
 
 ## 9. 必要验证
 
-- `pnpm test --run`：仅任务校验 + 模板文档校验两组定向测试。
+- `pnpm test --run`：Workspace 契约与路径隔离、任务校验、模板文档校验等定向测试。
 - `pnpm build`：类型检查 + 生产构建。
 - 手工冒烟：上传 4 张图 → 构建 left-hero-right-three → 改标题 → 导出 PNG →
   hero 无 Key 时明确报错。

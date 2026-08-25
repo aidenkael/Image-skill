@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateCreateTaskRequest, TaskValidationError } from './tasks';
+import { TaskRecordSchema, validateCreateTaskRequest, TaskValidationError } from './tasks';
 import { COLLAGE_TEMPLATE_IDS } from './templates';
 
 const validHero = {
@@ -96,5 +96,23 @@ describe('任务请求校验（count 按任务类型限制）', () => {
         ctx,
       ),
     ).toThrow(TaskValidationError);
+  });
+});
+
+describe('任务记录归属商品工作区', () => {
+  const record = {
+    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    request: validHero,
+    status: 'succeeded',
+    createdAt: '2026-08-25T00:00:00.000Z',
+    updatedAt: '2026-08-25T00:00:00.000Z',
+  };
+
+  it('必须包含合法 Workspace ID', () => {
+    expect(TaskRecordSchema.parse(record).workspaceId).toBe(record.workspaceId);
+    const { workspaceId: _workspaceId, ...missing } = record;
+    expect(() => TaskRecordSchema.parse(missing)).toThrow();
+    expect(() => TaskRecordSchema.parse({ ...record, workspaceId: 'bad' })).toThrow();
   });
 });

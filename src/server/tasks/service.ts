@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import {
   CreateTaskRequest,
   TaskRecord,
+  TaskRecordSchema,
   TaskValidationError,
   validateCreateTaskRequest,
 } from '@/core/tasks';
@@ -10,15 +11,17 @@ import { TaskResult, TaskResultSchema } from '@/core/results';
 import { COLLAGE_TEMPLATE_IDS } from '@/core/templates';
 import { runHeroTask } from './hero';
 import { runCollageTask } from './collage';
-import { runtimePath, writeJson, readJson } from '@/server/storage/fs-store';
+import { readJson, UUID_RE, writeJson } from '@/server/storage/fs-store';
+import { workspaceRuntimePath } from '@/server/workspaces/service';
 
 /**
  * 任务服务：单条任务的通用入口（未来批量调用方复用同一契约）。
  * V1 同步执行，无队列。
  */
 
-function taskFile(id: string): string {
-  return runtimePath('tasks', `${id}.json`);
+function taskFile(workspaceId: string, id: string): string {
+  if (!UUID_RE.test(id)) throw new TaskValidationError(`非法任务 id: ${id}`);
+  return workspaceRuntimePath(workspaceId, 'tasks', `${id}.json`);
 }
 
 /** 读取历史任务时按当前客户端结果契约清洗，避免旧 localPath 透传到 API。 */
@@ -28,20 +31,27 @@ function clientSafeTaskRecord(record: TaskRecord): TaskRecord {
   return { ...record, result: result.success ? result.data : undefined };
 }
 
-export async function createTask(raw: unknown): Promise<TaskRecord> {
+export async function createTask(workspaceId: string, raw: unknown): Promise<TaskRecord> {
   const request = validateCreateTaskRequest(raw, {
     availableCollageTemplates: COLLAGE_TEMPLATE_IDS,
   });
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const record: TaskRecord = { id, request, status: 'running', createdAt: now, updatedAt: now };
-  await writeJson(taskFile(id), record);
+  const record: TaskRecord = {
+    id,
+    workspaceId,
+    request,
+    status: 'running',
+    createdAt: now,
+    updatedAt: now,
+  };
+  await writeJson(taskFile(workspaceId, id), record);
 
   try {
     const result: TaskResult =
       request.kind === 'hero'
-        ? await runHeroTask(request, id)
+        ? await runHeroTask(workspaceId, request, id)
         : await runCollageTask(request);
     record.status = 'succeeded';
     record.result = result;
@@ -50,23 +60,27 @@ export async function createTask(raw: unknown): Promise<TaskRecord> {
     record.error = err instanceof Error ? err.message : String(err);
   }
   record.updatedAt = new Date().toISOString();
-  await writeJson(taskFile(id), record);
+  await writeJson(taskFile(workspaceId, id), record);
   return record;
 }
 
-export async function getTask(id: string): Promise<TaskRecord | null> {
-  const task = await readJson<TaskRecord>(taskFile(id));
-  return task ? clientSafeTaskRecord(task) : null;
+export async function getTask(workspaceId: string, id: string): Promise<TaskRecord | null> {
+  const parsed = TaskRecordSchema.safeParse(await readJson<unknown>(taskFile(workspaceId, id)));
+  return parsed.success ? clientSafeTaskRecord(parsed.data) : null;
 }
 
-export async function listTasks(): Promise<TaskRecord[]> {
-  const dir = runtimePath('tasks');
+export async function listTasks(workspaceId: string): Promise<TaskRecord[]> {
+  const dir = workspaceRuntimePath(workspaceId, 'tasks');
   const names = await fs.readdir(dir).catch(() => []);
   const tasks: TaskRecord[] = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
-    const task = await readJson<TaskRecord>(runtimePath('tasks', name));
-    if (task) tasks.push(clientSafeTaskRecord(task));
+    const parsed = TaskRecordSchema.safeParse(
+      await readJson<unknown>(workspaceRuntimePath(workspaceId, 'tasks', name)),
+    );
+    if (parsed.success && parsed.data.workspaceId === workspaceId) {
+      tasks.push(clientSafeTaskRecord(parsed.data));
+    }
   }
   return tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
