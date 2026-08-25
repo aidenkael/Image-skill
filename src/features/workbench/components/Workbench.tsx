@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AssetRole } from '@/core/assets';
 import { assetUrl } from '@/core/results';
 import type { TemplateDocument } from '@/core/templates';
 import { AssetPanel } from '@/features/assets/components/AssetPanel';
@@ -8,8 +9,11 @@ import { CollageControls } from '@/features/collage/components/CollageControls';
 import type { CollageEditorHandle } from '@/features/collage/components/CollageEditor';
 import {
   buildCollageDocument,
+  collageDocumentUsesForbiddenAsset,
   getCollageTemplate,
   listCollageTemplates,
+  removeAssetFromCollageDocument,
+  sanitizeCollageDocumentAssets,
 } from '@/features/collage/model/collage';
 import { HeroControls } from '@/features/hero/components/HeroControls';
 import { ProductInsightBar } from '@/features/intelligence/components/ProductInsightBar';
@@ -86,9 +90,33 @@ export function Workbench() {
     await collageEditorRef.current?.createLayout(next);
   }, [wb]);
 
+  const handleSetRole = useCallback(async (id: string, role: AssetRole) => {
+    const updated = await wb.setRole(id, role);
+    if (!updated || updated.role !== 'reference') return;
+    const editor = collageEditorRef.current;
+    const currentDoc = editor?.getDocument();
+    if (!editor || !currentDoc) return;
+    const sanitized = removeAssetFromCollageDocument(currentDoc, updated.id);
+    wb.replaceActiveCollageVariant(sanitized);
+    await editor.createLayout(sanitized);
+  }, [wb]);
+
   const handleExport = useCallback(async () => {
     try {
-      await collageEditorRef.current?.exportPNG(`collage-variant-${wb.activeCollageVariant + 1}.png`);
+      const editor = collageEditorRef.current;
+      const currentDoc = editor?.getDocument();
+      if (!editor || !currentDoc) {
+        wb.setNotice('导出失败，请稍后重试');
+        return;
+      }
+      if (collageDocumentUsesForbiddenAsset(currentDoc, wb.assets)) {
+        const sanitized = sanitizeCollageDocumentAssets(currentDoc, wb.assets);
+        wb.replaceActiveCollageVariant(sanitized);
+        await editor.createLayout(sanitized);
+        wb.setNotice('方案中有已失效或参考图片，已移除，请确认后重新导出。');
+        return;
+      }
+      await editor.exportPNG(`collage-variant-${wb.activeCollageVariant + 1}.png`);
       wb.setNotice('当前方案已导出 PNG');
     } catch {
       wb.setNotice('导出失败，请稍后重试');
@@ -97,6 +125,8 @@ export function Workbench() {
 
   const handleReplaceSlot = useCallback(async (slotIndex: number, assetId: string) => {
     if (!workspaceId || !collageDoc) return;
+    const asset = wb.assets.find((item) => item.id === assetId);
+    if (!asset || asset.role === 'reference') return;
     const slotLayer = collageDoc.layers.find(
       (layer) => layer.type === 'image' && layer.slotIndex === slotIndex,
     );
@@ -106,7 +136,7 @@ export function Workbench() {
       assetUrl(workspaceId, assetId),
       assetId,
     );
-  }, [collageDoc, workspaceId]);
+  }, [collageDoc, wb.assets, workspaceId]);
 
   const handleCollageDocumentChange = useCallback(
     (document: TemplateDocument) => wb.replaceActiveCollageVariant(document),
@@ -146,7 +176,7 @@ export function Workbench() {
             busy={wb.busy}
             onUpload={wb.upload}
             onToggle={wb.toggleAsset}
-            onSetRole={wb.setRole}
+            onSetRole={(id, role) => void handleSetRole(id, role)}
           />
 
           <main className="center-column">

@@ -1,5 +1,6 @@
 'use client';
 
+import type { AssetRef } from '@/core/assets';
 import type { TemplateDocument } from '@/core/templates';
 import { parseTemplateDocument } from '@/core/templates';
 import leftHeroRightThree from '@templates/collage/left-hero-right-three.json';
@@ -68,5 +69,74 @@ export function mergeActiveVariantEdit(
 ): TemplateDocument[] {
   return variants.map((doc, index) =>
     index === activeIndex && edited ? edited : doc,
+  );
+}
+
+function allowedCollageAssetIds(assets: AssetRef[]): Set<string> {
+  return new Set(
+    assets
+      .filter((asset) => asset.role !== 'reference')
+      .map((asset) => asset.id),
+  );
+}
+
+/** 清除不存在或已成为参考图的图片内容，保留方案结构与其他编辑。 */
+export function sanitizeCollageDocumentAssets(
+  doc: TemplateDocument,
+  assets: AssetRef[],
+): TemplateDocument {
+  const allowed = allowedCollageAssetIds(assets);
+  let changed = false;
+  const layers = doc.layers.map((layer) => {
+    if (
+      layer.type !== 'image' ||
+      !layer.assetId ||
+      allowed.has(layer.assetId)
+    ) {
+      return layer;
+    }
+
+    changed = true;
+    return {
+      ...layer,
+      assetId: null,
+      contentTransform: undefined,
+    };
+  });
+
+  return changed ? { ...doc, layers } : doc;
+}
+
+/** 从方案中移除指定图片资产，供角色变更后的定向同步使用。 */
+export function removeAssetFromCollageDocument(
+  doc: TemplateDocument,
+  assetId: string,
+): TemplateDocument {
+  let changed = false;
+  const layers = doc.layers.map((layer) => {
+    if (layer.type !== 'image' || layer.assetId !== assetId) return layer;
+
+    changed = true;
+    return {
+      ...layer,
+      assetId: null,
+      contentTransform: undefined,
+    };
+  });
+
+  return changed ? { ...doc, layers } : doc;
+}
+
+/** 导出前检测当前实际文档是否引用参考图或已不存在的资产。 */
+export function collageDocumentUsesForbiddenAsset(
+  doc: TemplateDocument,
+  assets: AssetRef[],
+): boolean {
+  const allowed = allowedCollageAssetIds(assets);
+  return doc.layers.some(
+    (layer) =>
+      layer.type === 'image' &&
+      Boolean(layer.assetId) &&
+      !allowed.has(layer.assetId!),
   );
 }

@@ -12,6 +12,10 @@ import type {
 import type { TemplateDocument } from '@/core/templates';
 import { WorkspaceDraftSchema } from '@/core/workspaces';
 import { listAssets, patchAssetRole, uploadAssets } from '@/features/assets/model/api';
+import {
+  removeAssetFromCollageDocument,
+  sanitizeCollageDocumentAssets,
+} from '@/features/collage/model/collage';
 import { createTask, listTasks } from '@/features/workbench/model/api';
 import { getWorkspaceDraft, saveWorkspaceDraft } from '@/features/workspaces/model/api';
 
@@ -37,7 +41,7 @@ export interface WorkbenchModel {
   upload(files: File[]): Promise<void>;
   toggleAsset(id: string): void;
   clearSelection(): void;
-  setRole(id: string, role: AssetRole): Promise<void>;
+  setRole(id: string, role: AssetRole): Promise<AssetRef | null>;
   setKind(kind: TaskKind): void;
   patchHeroOptions(patch: Partial<HeroTaskOptions>): void;
   setHeroCount(n: number): void;
@@ -120,6 +124,41 @@ export function sourceIdAfterRoleChange(
     : sourceAssetId;
 }
 
+export function sanitizeCollageVariants(
+  variants: TemplateDocument[],
+  assets: AssetRef[],
+): TemplateDocument[] {
+  return variants.map((doc) => sanitizeCollageDocumentAssets(doc, assets));
+}
+
+export function resolveActiveCollageVariant(
+  activeIndex: number,
+  variants: TemplateDocument[],
+): number {
+  return variants.length === 0
+    ? 0
+    : Math.min(activeIndex, variants.length - 1);
+}
+
+export function replaceActiveCollageVariantInList(
+  variants: TemplateDocument[],
+  activeIndex: number,
+  doc: TemplateDocument,
+  assets: AssetRef[],
+): TemplateDocument[] {
+  const sanitized = sanitizeCollageDocumentAssets(doc, assets);
+  return variants.map((variant, index) =>
+    index === activeIndex ? sanitized : variant,
+  );
+}
+
+export function removeAssetFromCollageVariants(
+  variants: TemplateDocument[],
+  assetId: string,
+): TemplateDocument[] {
+  return variants.map((doc) => removeAssetFromCollageDocument(doc, assetId));
+}
+
 export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const [assets, setAssets] = useState<AssetRef[]>([]);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
@@ -144,8 +183,12 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const requestVersionRef = useRef(0);
   const activeWorkspaceRef = useRef<string | null>(workspaceId);
   const hydratedWorkspaceRef = useRef<string | null>(hydratedWorkspaceId);
+  const assetsRef = useRef<AssetRef[]>(assets);
+  const activeCollageVariantRef = useRef(activeCollageVariant);
   activeWorkspaceRef.current = workspaceId;
   hydratedWorkspaceRef.current = hydratedWorkspaceId;
+  assetsRef.current = assets;
+  activeCollageVariantRef.current = activeCollageVariant;
 
   useEffect(() => {
     const version = ++requestVersionRef.current;
@@ -209,10 +252,14 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
           : null;
         const fallbackOptimizeTask = taskList.find((task) => task.request.kind === 'optimize') ?? null;
         const restoredOptimizeTask = savedOptimizeTask ?? fallbackOptimizeTask;
-        const activeVariant =
-          draft.collageVariants.length === 0
-            ? 0
-            : Math.min(draft.activeCollageVariant, draft.collageVariants.length - 1);
+        const restoredCollageVariants = sanitizeCollageVariants(
+          draft.collageVariants,
+          assetList,
+        );
+        const activeVariant = resolveActiveCollageVariant(
+          draft.activeCollageVariant,
+          restoredCollageVariants,
+        );
 
         setAssets(assetList);
         setTasks(taskList);
@@ -222,7 +269,7 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
         setHeroCountState(draft.heroCount);
         setCollageOptionsState(draft.collageOptions);
         setCollageCountState(draft.collageCount);
-        setCollageVariantsState(draft.collageVariants);
+        setCollageVariantsState(restoredCollageVariants);
         setActiveCollageVariantState(activeVariant);
         setLatestHeroTask(restoredHeroTask);
         setLatestHeroTaskId(restoredHeroTask?.id ?? null);
@@ -295,7 +342,9 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     try {
       const created = await uploadAssets(currentWorkspaceId, files);
       if (activeWorkspaceRef.current !== currentWorkspaceId) return;
-      setAssets((current) => [...created, ...current]);
+      const nextAssets = [...created, ...assetsRef.current];
+      assetsRef.current = nextAssets;
+      setAssets(nextAssets);
       setSelectedAssetIds((current) =>
         [...new Set([...current, ...created.map((asset) => asset.id)])].slice(0, 9),
       );
@@ -322,13 +371,17 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
 
   const clearSelection = useCallback(() => setSelectedAssetIds([]), []);
 
-  const setRole = useCallback(async (id: string, role: AssetRole) => {
+  const setRole = useCallback(async (id: string, role: AssetRole): Promise<AssetRef | null> => {
     const currentWorkspaceId = activeWorkspaceRef.current;
-    if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return;
+    if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return null;
     try {
       const updated = await patchAssetRole(currentWorkspaceId, id, role);
-      if (activeWorkspaceRef.current !== currentWorkspaceId) return;
-      setAssets((current) => current.map((asset) => (asset.id === id ? updated : asset)));
+      if (activeWorkspaceRef.current !== currentWorkspaceId) return null;
+      const nextAssets = assetsRef.current.map((asset) =>
+        asset.id === id ? updated : asset,
+      );
+      assetsRef.current = nextAssets;
+      setAssets(nextAssets);
       setHeroOptionsState((current) => ({
         ...current,
         sourceAssetId: sourceIdAfterRoleChange(current.sourceAssetId, id, updated.role),
@@ -337,10 +390,17 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
         ...current,
         sourceAssetId: sourceIdAfterRoleChange(current.sourceAssetId, id, updated.role),
       }));
+      if (updated.role === 'reference') {
+        setCollageVariantsState((current) =>
+          removeAssetFromCollageVariants(current, updated.id),
+        );
+      }
+      return updated;
     } catch (reason) {
       if (activeWorkspaceRef.current === currentWorkspaceId) {
         setError(reason instanceof Error ? reason.message : String(reason));
       }
+      return null;
     }
   }, []);
 
@@ -362,13 +422,22 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setOptimizeOptionsState((current) => ({ ...current, ...patch }));
   }, []);
 
+  const setCollageVariants = useCallback((variants: TemplateDocument[]) => {
+    setCollageVariantsState(sanitizeCollageVariants(variants, assetsRef.current));
+  }, []);
+
   const replaceActiveCollageVariant = useCallback(
     (doc: TemplateDocument) => {
       setCollageVariantsState((current) =>
-        current.map((variant, index) => (index === activeCollageVariant ? doc : variant)),
+        replaceActiveCollageVariantInList(
+          current,
+          activeCollageVariantRef.current,
+          doc,
+          assetsRef.current,
+        ),
       );
     },
-    [activeCollageVariant],
+    [],
   );
 
   const runHero = useCallback(async (): Promise<TaskRecord | null> => {
@@ -522,7 +591,7 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setHeroCount: setHeroCountState,
     patchCollageOptions,
     setCollageCount: setCollageCountState,
-    setCollageVariants: setCollageVariantsState,
+    setCollageVariants,
     setActiveCollageVariant: setActiveCollageVariantState,
     replaceActiveCollageVariant,
     runHero,

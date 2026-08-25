@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { AssetRef } from '@/core/assets';
 import type { TaskRecord } from '@/core/tasks';
+import type { TemplateDocument } from '@/core/templates';
 import { DEFAULT_WORKSPACE_DRAFT, WorkspaceDraftSchema } from '@/core/workspaces';
 import {
   heroRunStatePatch,
+  removeAssetFromCollageVariants,
+  replaceActiveCollageVariantInList,
   resolveExecutableSourceAssetId,
+  resolveActiveCollageVariant,
   restoreSelectedAssetIds,
+  sanitizeCollageVariants,
   sourceIdAfterRoleChange,
 } from './workbench';
 
@@ -56,6 +61,30 @@ function asset(role: AssetRef['role']): AssetRef {
   };
 }
 
+function collageAsset(id: string, role: AssetRef['role']): AssetRef {
+  return { ...asset(role), id, name: `${id}.png` };
+}
+
+function collageDoc(name: string, assetId: string | null): TemplateDocument {
+  return {
+    id: 'four-grid',
+    name,
+    width: 800,
+    height: 800,
+    layers: [
+      {
+        type: 'image', id: `${name}-image`, x: 0, y: 0, width: 400, height: 400,
+        fit: 'cover', slotIndex: 0, assetId,
+        ...(assetId ? { contentTransform: { left: 1, top: 2, scaleX: 1.1, scaleY: 1.2 } } : {}),
+      },
+      {
+        type: 'text', id: `${name}-text`, x: 0, y: 420, width: 400,
+        text: `${name} 用户文案`, fontSize: 32,
+      },
+    ],
+  };
+}
+
 describe('Workspace 三任务草稿契约', () => {
   it('允许尚未选择源图的 Optimize 默认草稿并保留恢复字段', () => {
     expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.directionId).toBeUndefined();
@@ -83,6 +112,59 @@ describe('Workspace 三任务草稿契约', () => {
         'reference',
       ),
     ).toBe(SOURCE_ID);
+  });
+
+  it('恢复 Collage 草稿时逐方案清除参考图与缺失图，并保留方案数量和文案', () => {
+    const variants = [
+      collageDoc('有效方案', 'product'),
+      collageDoc('参考图方案', 'reference'),
+      collageDoc('缺失图方案', 'missing'),
+    ];
+    const restored = sanitizeCollageVariants(variants, [
+      collageAsset('product', 'front'),
+      collageAsset('reference', 'reference'),
+    ]);
+
+    expect(restored).toHaveLength(3);
+    expect(restored[0]).toBe(variants[0]);
+    expect(restored[1].layers[0]).toMatchObject({ assetId: null });
+    expect(restored[2].layers[0]).toMatchObject({ assetId: null });
+    expect(restored.map((doc) => doc.layers[1])).toEqual(
+      variants.map((doc) => doc.layers[1]),
+    );
+    expect(resolveActiveCollageVariant(2, restored)).toBe(2);
+    expect(resolveActiveCollageVariant(9, restored)).toBe(2);
+    expect(resolveActiveCollageVariant(9, [])).toBe(0);
+  });
+
+  it('资产改为 reference 时从所有 Collage 方案移除，但不影响其他图片或方案数', () => {
+    const variants = [
+      collageDoc('方案一', 'changed'),
+      collageDoc('方案二', 'changed'),
+      collageDoc('方案三', 'other'),
+    ];
+    const next = removeAssetFromCollageVariants(variants, 'changed');
+
+    expect(next).toHaveLength(3);
+    expect(next[0].layers[0]).toMatchObject({ assetId: null });
+    expect(next[1].layers[0]).toMatchObject({ assetId: null });
+    expect(next[2]).toBe(variants[2]);
+  });
+
+  it('活动方案写入会再次净化，陈旧 Fabric 文档不能放回 reference', () => {
+    const variants = [collageDoc('活动方案', 'product'), collageDoc('其他方案', 'other')];
+    const staleFabricDoc = collageDoc('陈旧回调', 'product');
+    const next = replaceActiveCollageVariantInList(
+      variants,
+      0,
+      staleFabricDoc,
+      [collageAsset('product', 'reference'), collageAsset('other', 'detail')],
+    );
+
+    expect(next[0].name).toBe('陈旧回调');
+    expect(next[0].layers[0]).toMatchObject({ assetId: null });
+    expect(next[0].layers[1]).toEqual(staleFabricDoc.layers[1]);
+    expect(next[1]).toBe(variants[1]);
   });
 });
 

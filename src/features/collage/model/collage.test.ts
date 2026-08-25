@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import type { AssetRef } from '@/core/assets';
 import type { EditorLayer, TemplateDocument } from '@/core/templates';
 import {
   buildCollageDocument,
+  collageDocumentUsesForbiddenAsset,
   getCollageTemplate,
   listCollageTemplates,
   mergeActiveVariantEdit,
+  removeAssetFromCollageDocument,
+  sanitizeCollageDocumentAssets,
 } from './collage';
 
 /**
@@ -102,5 +106,89 @@ describe('mergeActiveVariantEdit：方案切换保留现场编辑', () => {
   it('无现场编辑（未创建画布）时保持原列表', () => {
     const merged = mergeActiveVariantEdit([v0, v1], 0, null);
     expect(merged).toEqual([v0, v1]);
+  });
+});
+
+function asset(id: string, role: AssetRef['role']): AssetRef {
+  return {
+    id,
+    name: `${id}.png`,
+    mimeType: 'image/png',
+    width: 100,
+    height: 100,
+    role,
+    createdAt: '2026-08-25T00:00:00.000Z',
+  };
+}
+
+describe('Collage 图片资产净化', () => {
+  const validTransform = { left: 1, top: 2, scaleX: 1.1, scaleY: 1.2 };
+  const removedTransform = { left: 3, top: 4, scaleX: 1.3, scaleY: 1.4 };
+  const doc: TemplateDocument = {
+    id: 'four-grid',
+    name: '保留的方案名',
+    width: 800,
+    height: 800,
+    layers: [
+      {
+        type: 'image', id: 'valid', x: 0, y: 0, width: 100, height: 100,
+        fit: 'cover', slotIndex: 0, assetId: 'product', contentTransform: validTransform,
+      },
+      {
+        type: 'image', id: 'reference', x: 100, y: 0, width: 100, height: 100,
+        fit: 'cover', slotIndex: 1, assetId: 'reference', contentTransform: removedTransform,
+      },
+      {
+        type: 'image', id: 'missing', x: 200, y: 0, width: 100, height: 100,
+        fit: 'contain', slotIndex: 2, assetId: 'missing', contentTransform: removedTransform,
+      },
+      {
+        type: 'text', id: 'title', x: 0, y: 120, width: 300,
+        text: '保留用户文案', fontSize: 32, tag: 'headline',
+      },
+      {
+        type: 'shape', id: 'background', x: 0, y: 0, width: 800, height: 800,
+        fill: '#fff',
+      },
+    ],
+  };
+  const assets = [asset('product', 'front'), asset('reference', 'reference')];
+
+  it('只清除参考图和缺失图，同时保留方案、有效图片、文字、形状与原输入', () => {
+    const before = structuredClone(doc);
+    const sanitized = sanitizeCollageDocumentAssets(doc, assets);
+
+    expect(sanitized).not.toBe(doc);
+    expect(sanitized).toMatchObject({
+      id: doc.id,
+      name: doc.name,
+      width: doc.width,
+      height: doc.height,
+    });
+    expect(sanitized.layers[0]).toEqual(doc.layers[0]);
+    expect(sanitized.layers[1]).toMatchObject({ assetId: null });
+    expect(sanitized.layers[2]).toMatchObject({ assetId: null });
+    expect(sanitized.layers[1]).toHaveProperty('contentTransform', undefined);
+    expect(sanitized.layers[2]).toHaveProperty('contentTransform', undefined);
+    expect(sanitized.layers[3]).toBe(doc.layers[3]);
+    expect(sanitized.layers[4]).toBe(doc.layers[4]);
+    expect(doc).toEqual(before);
+  });
+
+  it('定向移除只影响指定图片，并清除属于该图片的变换', () => {
+    const removed = removeAssetFromCollageDocument(doc, 'reference');
+
+    expect(removed.layers[0]).toEqual(doc.layers[0]);
+    expect(removed.layers[1]).toMatchObject({ assetId: null });
+    expect(removed.layers[1]).toHaveProperty('contentTransform', undefined);
+    expect(removed.layers[2]).toBe(doc.layers[2]);
+    expect(removeAssetFromCollageDocument(doc, 'not-used')).toBe(doc);
+  });
+
+  it('禁止资产检测与净化语义一致', () => {
+    expect(collageDocumentUsesForbiddenAsset(doc, assets)).toBe(true);
+    const sanitized = sanitizeCollageDocumentAssets(doc, assets);
+    expect(collageDocumentUsesForbiddenAsset(sanitized, assets)).toBe(false);
+    expect(sanitizeCollageDocumentAssets(sanitized, assets)).toBe(sanitized);
   });
 });
