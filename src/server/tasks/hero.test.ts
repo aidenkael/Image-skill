@@ -33,6 +33,7 @@ const direction: ProductIntelligenceRecord['plan']['heroDirections'][number] = {
 const intelligence = {
   analysis: { category: '杯子', visualSummary: '白色杯身', visibleFacts: [], visibleText: [], unverifiedFacts: [], assetObservations: [] },
   plan: { heroDirections: [direction], collage: { titleOptions: [], sellingPoints: [] } },
+  schemaVersion: 2,
   analyzedAt: '2026-08-25T00:00:00.000Z',
   assetSnapshot: [{ id: ASSET_ID, role: 'front' }],
 } as ProductIntelligenceRecord;

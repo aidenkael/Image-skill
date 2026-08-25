@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import type { AssetRef } from '@/core/assets';
 import type { TaskRecord } from '@/core/tasks';
 import { DEFAULT_WORKSPACE_DRAFT, WorkspaceDraftSchema } from '@/core/workspaces';
-import { heroRunStatePatch } from './workbench';
+import {
+  heroRunStatePatch,
+  resolveExecutableSourceAssetId,
+  restoreSelectedAssetIds,
+  sourceIdAfterRoleChange,
+} from './workbench';
 
 /**
  * runHero 结果状态一致性回归测试（heroRunStatePatch 为 runHero 完成后的唯一状态决策点）：
@@ -36,6 +42,19 @@ function heroTask(
 
 const SUCCEEDED_ID = '11111111-1111-4111-8111-111111111111';
 const FAILED_ID = '22222222-2222-4222-8222-222222222222';
+const SOURCE_ID = '33333333-3333-4333-8333-333333333333';
+
+function asset(role: AssetRef['role']): AssetRef {
+  return {
+    id: SOURCE_ID,
+    name: 'source.png',
+    mimeType: 'image/png',
+    width: 100,
+    height: 100,
+    role,
+    createdAt: '2026-08-25T00:00:00.000Z',
+  };
+}
 
 describe('Workspace 三任务草稿契约', () => {
   it('允许尚未选择源图的 Optimize 默认草稿并保留恢复字段', () => {
@@ -45,6 +64,25 @@ describe('Workspace 三任务草稿契约', () => {
     });
     expect(DEFAULT_WORKSPACE_DRAFT.latestOptimizeTaskId).toBeNull();
     expect(WorkspaceDraftSchema.parse({ ...DEFAULT_WORKSPACE_DRAFT })).toEqual(DEFAULT_WORKSPACE_DRAFT);
+  });
+
+  it('恢复时 Hero 与 Optimize 均拒绝 reference 源，但全局分析选择保留 reference', () => {
+    const reference = asset('reference');
+    expect(resolveExecutableSourceAssetId(SOURCE_ID, [reference])).toBe('');
+    expect(resolveExecutableSourceAssetId(SOURCE_ID, [asset('front')])).toBe(SOURCE_ID);
+    expect(restoreSelectedAssetIds([SOURCE_ID], [reference])).toEqual([SOURCE_ID]);
+  });
+
+  it('当前 Hero/Optimize 源改为 reference 时清空，其他角色或其他素材不影响', () => {
+    expect(sourceIdAfterRoleChange(SOURCE_ID, SOURCE_ID, 'reference')).toBe('');
+    expect(sourceIdAfterRoleChange(SOURCE_ID, SOURCE_ID, 'detail')).toBe(SOURCE_ID);
+    expect(
+      sourceIdAfterRoleChange(
+        SOURCE_ID,
+        '44444444-4444-4444-8444-444444444444',
+        'reference',
+      ),
+    ).toBe(SOURCE_ID);
   });
 });
 

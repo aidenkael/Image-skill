@@ -26,8 +26,16 @@ Put uncertain items in unverifiedFacts.
 Images whose role is reference are aesthetic references only.
 They must never establish product facts.
 
-Every visibleFacts / visibleText / sellingPoints item must cite one or more
-exact supplied asset ids in evidenceAssetIds.
+Every visibleFacts, visibleText, collage.titleOptions and
+collage.sellingPoints item must contain text and one or more exact supplied
+asset ids in evidenceAssetIds.
+
+Collage title text must be at most 60 characters.
+Collage selling-point text must be at most 40 characters.
+
+Reference-role images are aesthetic references only and must never appear in
+evidenceAssetIds for visible facts, visible text, collage titles or collage
+selling points.
 
 Hero directions may alter scene, lighting, composition and human interaction
 only. They must preserve product identity, shape, proportion, color, pattern,
@@ -53,10 +61,10 @@ analysis:
 plan:
   heroDirections[]
   collage:
-    titleOptions[]
-    sellingPoints[]
+    titleOptions[] as { text, evidenceAssetIds[] }
+    sellingPoints[] as { text, evidenceAssetIds[] }
 
-Each selling point must be directly supported by visible evidence.
+Each title and selling point must be directly supported by visible evidence.
 Prefer mobile-commerce clarity, truthful visual merchandising,
 natural commercial photography and low AI-looking scenes.`;
 }

@@ -95,4 +95,71 @@ describe('Workspace 任务素材归属校验', () => {
       .catch(() => []);
     expect(taskFiles).toEqual([]);
   });
+
+  it('Hero、Collage 与 Optimize 均在任务落盘前拒绝 reference 素材', async () => {
+    const workspace = await createWorkspace('参考图边界');
+    const referenceAssetId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const referenceAsset: AssetRef = {
+      id: referenceAssetId,
+      name: 'reference.png',
+      mimeType: 'image/png',
+      width: 100,
+      height: 100,
+      role: 'reference',
+      createdAt: '2026-08-25T00:00:00.000Z',
+    };
+    await writeJson(
+      workspaceRuntimePath(workspace.id, 'assets', referenceAssetId, 'asset.json'),
+      referenceAsset,
+    );
+
+    const requests = [
+      {
+        kind: 'hero',
+        assetIds: [referenceAssetId],
+        count: 1,
+        options: {
+          sourceAssetId: referenceAssetId,
+          ratio: '1:1',
+          person: 'auto',
+          sceneMode: 'prompt',
+          scenePrompt: '桌面',
+        },
+      },
+      {
+        kind: 'collage',
+        assetIds: [referenceAssetId],
+        count: 1,
+        options: {
+          templateId: 'left-hero-right-three',
+          includeTitle: false,
+          includeSellingPoints: false,
+        },
+      },
+      {
+        kind: 'optimize',
+        assetIds: [referenceAssetId],
+        count: 1,
+        options: {
+          sourceAssetId: referenceAssetId,
+          ratio: 'original',
+          fit: 'contain',
+          background: 'white',
+          maxEdge: 1600,
+          quality: 90,
+          format: 'jpg',
+        },
+      },
+    ];
+
+    for (const request of requests) {
+      await expect(createTask(workspace.id, request)).rejects.toThrow(
+        `参考图仅用于视觉参考，不能作为任务商品素材: ${referenceAssetId}`,
+      );
+    }
+    const taskFiles = await fs
+      .readdir(workspaceRuntimePath(workspace.id, 'tasks'))
+      .catch(() => []);
+    expect(taskFiles).toEqual([]);
+  });
 });

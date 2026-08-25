@@ -202,6 +202,7 @@ export function Workbench() {
                 count={wb.collageCount}
                 templates={templates}
                 selectedCount={wb.selectedAssetIds.length}
+                selectedAssetIds={wb.selectedAssetIds}
                 busy={wb.busy}
                 collageDoc={collageDoc}
                 assets={wb.assets}

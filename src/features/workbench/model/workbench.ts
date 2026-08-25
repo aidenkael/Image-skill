@@ -91,6 +91,35 @@ export function heroRunStatePatch(
   return patch;
 }
 
+export function restoreSelectedAssetIds(
+  selectedAssetIds: string[],
+  assets: AssetRef[],
+): string[] {
+  const availableIds = new Set(assets.map((asset) => asset.id));
+  return selectedAssetIds.filter((id) => availableIds.has(id));
+}
+
+export function resolveExecutableSourceAssetId(
+  sourceAssetId: string,
+  assets: AssetRef[],
+): string {
+  return assets.some(
+    (asset) => asset.id === sourceAssetId && asset.role !== 'reference',
+  )
+    ? sourceAssetId
+    : '';
+}
+
+export function sourceIdAfterRoleChange(
+  sourceAssetId: string,
+  changedAssetId: string,
+  role: AssetRole,
+): string {
+  return role === 'reference' && sourceAssetId === changedAssetId
+    ? ''
+    : sourceAssetId;
+}
+
 export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const [assets, setAssets] = useState<AssetRef[]>([]);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
@@ -151,13 +180,13 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     ])
       .then(([assetList, taskList, draft]) => {
         if (ignore || requestVersionRef.current !== version) return;
-        const assetIds = new Set(assetList.map((asset) => asset.id));
-        const selectedIds = draft.selectedAssetIds.filter((id) => assetIds.has(id));
+        const selectedIds = restoreSelectedAssetIds(draft.selectedAssetIds, assetList);
         const restoredHeroOptions = {
           ...draft.heroOptions,
-          sourceAssetId: assetIds.has(draft.heroOptions.sourceAssetId)
-            ? draft.heroOptions.sourceAssetId
-            : '',
+          sourceAssetId: resolveExecutableSourceAssetId(
+            draft.heroOptions.sourceAssetId,
+            assetList,
+          ),
         };
         const savedHeroTask = draft.latestHeroTaskId
           ? taskList.find(
@@ -168,9 +197,10 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
         const restoredHeroTask = savedHeroTask ?? fallbackHeroTask;
         const restoredOptimizeOptions = {
           ...draft.optimizeOptions,
-          sourceAssetId: assetIds.has(draft.optimizeOptions.sourceAssetId)
-            ? draft.optimizeOptions.sourceAssetId
-            : '',
+          sourceAssetId: resolveExecutableSourceAssetId(
+            draft.optimizeOptions.sourceAssetId,
+            assetList,
+          ),
         };
         const savedOptimizeTask = draft.latestOptimizeTaskId
           ? taskList.find(
@@ -299,6 +329,14 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
       const updated = await patchAssetRole(currentWorkspaceId, id, role);
       if (activeWorkspaceRef.current !== currentWorkspaceId) return;
       setAssets((current) => current.map((asset) => (asset.id === id ? updated : asset)));
+      setHeroOptionsState((current) => ({
+        ...current,
+        sourceAssetId: sourceIdAfterRoleChange(current.sourceAssetId, id, updated.role),
+      }));
+      setOptimizeOptionsState((current) => ({
+        ...current,
+        sourceAssetId: sourceIdAfterRoleChange(current.sourceAssetId, id, updated.role),
+      }));
     } catch (reason) {
       if (activeWorkspaceRef.current === currentWorkspaceId) {
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -337,7 +375,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     const currentWorkspaceId = activeWorkspaceRef.current;
     if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return null;
     const sourceAssetId = heroOptions.sourceAssetId;
-    if (!sourceAssetId || !assets.some((asset) => asset.id === sourceAssetId)) {
+    const sourceAsset = assets.find((asset) => asset.id === sourceAssetId);
+    if (!sourceAsset || sourceAsset.role === 'reference') {
       setError('请在右侧明确选择一张源商品图片');
       return null;
     }
@@ -413,7 +452,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const runOptimize = useCallback(async (): Promise<TaskRecord | null> => {
     const currentWorkspaceId = activeWorkspaceRef.current;
     if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return null;
-    if (!assets.some((asset) => asset.id === optimizeOptions.sourceAssetId)) {
+    const sourceAsset = assets.find((asset) => asset.id === optimizeOptions.sourceAssetId);
+    if (!sourceAsset || sourceAsset.role === 'reference') {
       setError('请选择一张需要优化的商品图');
       return null;
     }

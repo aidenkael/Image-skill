@@ -14,8 +14,13 @@ vi.mock('@/server/providers/aliyun-qwen-vision', () => ({
 import { saveAsset, setAssetRole } from '@/server/assets/service';
 import { createWorkspace, workspaceRuntimePath } from '@/server/workspaces/service';
 import { analyzeWorkspace, getWorkspaceIntelligence } from './service';
-import { isIntelligenceFresh, ProductIntelligenceRecordSchema } from '@/core/intelligence';
+import {
+  isIntelligenceFresh,
+  ProductIntelligenceRecordSchema,
+  PRODUCT_INTELLIGENCE_SCHEMA_VERSION,
+} from '@/core/intelligence';
 import type { AssetRef } from '@/core/assets';
+import { writeJson } from '@/server/storage/fs-store';
 
 const previousRuntime = process.env.RUNTIME_DIR;
 let root = '';
@@ -42,7 +47,10 @@ function payload(assetId: string) {
     },
     plan: {
       heroDirections: [{ id: 'hero-1', title: '桌面', sourceAssetId: assetId, scene: '明亮桌面', composition: '居中', lighting: '侧光', person: 'none', prompt: 'Bright tabletop scene.', reason: '主体清晰' }],
-      collage: { titleOptions: ['简洁杯身'], sellingPoints: [{ text: '白色杯身', evidenceAssetIds: [assetId] }] },
+      collage: {
+        titleOptions: [{ text: '简洁杯身', evidenceAssetIds: [assetId] }],
+        sellingPoints: [{ text: '白色杯身', evidenceAssetIds: [assetId] }],
+      },
     },
   };
 }
@@ -61,6 +69,7 @@ describe('商品理解服务校验与原子持久化', () => {
     analyzeMock.mockResolvedValue(payload(asset.id));
     const record = await analyzeWorkspace(workspace.id, [asset.id]);
     expect(analyzeMock).toHaveBeenCalledTimes(1);
+    expect(record.schemaVersion).toBe(PRODUCT_INTELLIGENCE_SCHEMA_VERSION);
     expect(record.assetSnapshot).toEqual([{ id: asset.id, role: 'front' }]);
     await expect(getWorkspaceIntelligence(workspace.id)).resolves.toEqual(record);
   });
@@ -78,12 +87,90 @@ describe('商品理解服务校验与原子持久化', () => {
     analyzeMock.mockResolvedValue(payload(asset.id));
     await expect(analyzeWorkspace(workspace.id, [asset.id])).rejects.toThrow(/参考图/);
   });
+
+  it('标题引用未参与分析的图片时拒绝', async () => {
+    const { workspace, asset } = await fixture();
+    const invalid = payload(asset.id);
+    invalid.plan.collage.titleOptions[0].evidenceAssetIds = [
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ];
+    analyzeMock.mockResolvedValue(invalid);
+    await expect(analyzeWorkspace(workspace.id, [asset.id])).rejects.toThrow(/未参与分析/);
+  });
+
+  it('标题只由 reference 图片支持时拒绝，但 reference 仍可作为显式分析输入', async () => {
+    const { workspace, asset } = await fixture();
+    const buffer = await sharp({
+      create: { width: 20, height: 10, channels: 3, background: '#eeeeee' },
+    }).png().toBuffer();
+    const reference = await saveAsset(workspace.id, {
+      buffer,
+      name: 'reference.png',
+      mimeType: 'image/png',
+    });
+    await setAssetRole(workspace.id, reference.id, 'reference');
+    const invalid = payload(asset.id);
+    invalid.analysis.assetObservations.push({
+      assetId: reference.id,
+      suggestedRole: 'reference',
+      quality: 'usable',
+      note: '仅作为视觉参考',
+    });
+    invalid.plan.collage.titleOptions[0].evidenceAssetIds = [reference.id];
+    analyzeMock.mockResolvedValue(invalid);
+    await expect(
+      analyzeWorkspace(workspace.id, [asset.id, reference.id]),
+    ).rejects.toThrow(/参考图/);
+    expect(analyzeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('标题超过 60 字或卖点超过 40 字时拒绝', async () => {
+    const { workspace, asset } = await fixture();
+    const longTitle = payload(asset.id);
+    longTitle.plan.collage.titleOptions[0].text = '题'.repeat(61);
+    analyzeMock.mockResolvedValueOnce(longTitle);
+    await expect(analyzeWorkspace(workspace.id, [asset.id])).rejects.toThrow(/结构化/);
+
+    const longPoint = payload(asset.id);
+    longPoint.plan.collage.sellingPoints[0].text = '卖'.repeat(41);
+    analyzeMock.mockResolvedValueOnce(longPoint);
+    await expect(analyzeWorkspace(workspace.id, [asset.id])).rejects.toThrow(/结构化/);
+  });
+
+  it('旧无版本记录返回 null，标记为 v2 的损坏记录仍报错', async () => {
+    const { workspace, asset } = await fixture();
+    const file = workspaceRuntimePath(workspace.id, 'intelligence.json');
+    await writeJson(file, {
+      ...payload(asset.id),
+      analyzedAt: '2026-08-25T00:00:00.000Z',
+      assetSnapshot: [{ id: asset.id, role: 'front' }],
+    });
+    await expect(getWorkspaceIntelligence(workspace.id)).resolves.toBeNull();
+
+    await writeJson(file, { schemaVersion: 2, broken: true });
+    await expect(getWorkspaceIntelligence(workspace.id)).rejects.toThrow(/损坏/);
+  });
+
+  it('失败的重新分析不会覆盖上一份有效 v2 记录', async () => {
+    const { workspace, asset } = await fixture();
+    analyzeMock.mockResolvedValueOnce(payload(asset.id));
+    const previous = await analyzeWorkspace(workspace.id, [asset.id]);
+
+    const invalid = payload(asset.id);
+    invalid.plan.collage.titleOptions[0].evidenceAssetIds = [
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ];
+    analyzeMock.mockResolvedValueOnce(invalid);
+    await expect(analyzeWorkspace(workspace.id, [asset.id])).rejects.toThrow(/未参与分析/);
+    await expect(getWorkspaceIntelligence(workspace.id)).resolves.toEqual(previous);
+  });
 });
 
 describe('商品理解契约与新鲜度', () => {
   const assetId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const record = ProductIntelligenceRecordSchema.parse({
     ...payload(assetId),
+    schemaVersion: PRODUCT_INTELLIGENCE_SCHEMA_VERSION,
     analyzedAt: '2026-08-25T00:00:00.000Z',
     assetSnapshot: [{ id: assetId, role: 'front' }],
   });

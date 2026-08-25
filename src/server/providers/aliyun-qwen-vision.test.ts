@@ -18,7 +18,10 @@ const payload = {
   },
   plan: {
     heroDirections: [{ id: 'hero-1', title: '街头', sourceAssetId: ASSET_ID, scene: '城市街头', composition: '居中', lighting: '自然光', person: 'person', prompt: 'Urban street fashion scene.', reason: '适合商品风格' }],
-    collage: { titleOptions: ['利落出街'], sellingPoints: [{ text: '黑色包体', evidenceAssetIds: [ASSET_ID] }] },
+    collage: {
+      titleOptions: [{ text: '利落出街', evidenceAssetIds: [ASSET_ID] }],
+      sellingPoints: [{ text: '黑色包体', evidenceAssetIds: [ASSET_ID] }],
+    },
   },
 };
 
@@ -47,6 +50,17 @@ describe('qwen 视觉理解 Provider', () => {
     expect(requestBody.response_format).toEqual({ type: 'json_object' });
     expect(requestBody.enable_thinking).toBe(false);
     expect(requestBody).not.toHaveProperty('max_tokens');
+    const messages = requestBody.messages as Array<{
+      role: string;
+      content: string | Array<{ type: string; text?: string }>;
+    }>;
+    expect(messages[0].content).toContain('collage.titleOptions');
+    expect(messages[0].content).toContain('at most 40 characters');
+    expect(messages[0].content).toContain('must never appear in\nevidenceAssetIds');
+    const userContent = messages[1].content as Array<{ type: string; text?: string }>;
+    expect(userContent.at(-1)?.text).toContain(
+      'titleOptions[] as { text, evidenceAssetIds[] }',
+    );
     expect(result.analysis.category).toBe('包');
     expect(log).not.toHaveBeenCalled();
   });

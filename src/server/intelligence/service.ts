@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   ProductIntelligencePayloadSchema,
   ProductIntelligenceRecordSchema,
+  PRODUCT_INTELLIGENCE_SCHEMA_VERSION,
   type ProductIntelligencePayload,
   type ProductIntelligenceRecord,
 } from '@/core/intelligence';
@@ -24,6 +25,14 @@ export async function getWorkspaceIntelligence(
 ): Promise<ProductIntelligenceRecord | null> {
   const raw = await readJson<unknown>(intelligenceFile(workspaceId));
   if (raw === null) return null;
+  if (
+    typeof raw !== 'object' ||
+    raw === null ||
+    (raw as { schemaVersion?: unknown }).schemaVersion !==
+      PRODUCT_INTELLIGENCE_SCHEMA_VERSION
+  ) {
+    return null;
+  }
   const parsed = ProductIntelligenceRecordSchema.safeParse(raw);
   if (!parsed.success) throw new IntelligenceValidationError('商品分析记录损坏或格式不合法');
   return parsed.data;
@@ -35,6 +44,7 @@ function allEvidenceIds(payload: ProductIntelligencePayload): string[] {
     ...payload.analysis.visibleText.flatMap((claim) => claim.evidenceAssetIds),
     ...payload.analysis.assetObservations.map((item) => item.assetId),
     ...payload.plan.heroDirections.map((item) => item.sourceAssetId),
+    ...payload.plan.collage.titleOptions.flatMap((claim) => claim.evidenceAssetIds),
     ...payload.plan.collage.sellingPoints.flatMap((claim) => claim.evidenceAssetIds),
   ];
 }
@@ -43,6 +53,7 @@ function factualEvidenceIds(payload: ProductIntelligencePayload): string[] {
   return [
     ...payload.analysis.visibleFacts.flatMap((claim) => claim.evidenceAssetIds),
     ...payload.analysis.visibleText.flatMap((claim) => claim.evidenceAssetIds),
+    ...payload.plan.collage.titleOptions.flatMap((claim) => claim.evidenceAssetIds),
     ...payload.plan.collage.sellingPoints.flatMap((claim) => claim.evidenceAssetIds),
   ];
 }
@@ -118,6 +129,7 @@ export async function analyzeWorkspace(
 
   const record = ProductIntelligenceRecordSchema.parse({
     ...payload,
+    schemaVersion: PRODUCT_INTELLIGENCE_SCHEMA_VERSION,
     analyzedAt: new Date().toISOString(),
     assetSnapshot: assets.map((asset) => ({ id: asset!.id, role: asset!.role })),
   });

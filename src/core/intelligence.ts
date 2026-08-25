@@ -6,6 +6,14 @@ export const EvidenceClaimSchema = z.object({
   evidenceAssetIds: z.array(z.string().uuid()).min(1).max(4),
 });
 
+export const CollageTitleClaimSchema = EvidenceClaimSchema.extend({
+  text: z.string().trim().min(1).max(60),
+});
+
+export const CollageSellingPointClaimSchema = EvidenceClaimSchema.extend({
+  text: z.string().trim().min(1).max(40),
+});
+
 export const AssetObservationSchema = z.object({
   assetId: z.string().uuid(),
   suggestedRole: z.enum(ASSET_ROLES),
@@ -35,8 +43,8 @@ export const HeroDirectionSchema = z.object({
 });
 
 export const CollageCopyPlanSchema = z.object({
-  titleOptions: z.array(z.string().trim().min(1).max(60)).max(3),
-  sellingPoints: z.array(EvidenceClaimSchema).max(6),
+  titleOptions: z.array(CollageTitleClaimSchema).max(3),
+  sellingPoints: z.array(CollageSellingPointClaimSchema).max(6),
 });
 
 export const VisualPlanSchema = z.object({
@@ -54,7 +62,10 @@ export const IntelligenceAssetSnapshotSchema = z.object({
   role: z.enum(ASSET_ROLES),
 });
 
+export const PRODUCT_INTELLIGENCE_SCHEMA_VERSION = 2 as const;
+
 export const ProductIntelligenceRecordSchema = ProductIntelligencePayloadSchema.extend({
+  schemaVersion: z.literal(PRODUCT_INTELLIGENCE_SCHEMA_VERSION),
   analyzedAt: z.string(),
   assetSnapshot: z.array(IntelligenceAssetSnapshotSchema).min(1).max(9),
 });

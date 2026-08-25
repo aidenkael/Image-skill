@@ -43,6 +43,9 @@ export async function createTask(workspaceId: string, raw: unknown): Promise<Tas
     if (!asset) {
       throw new TaskValidationError(`任务引用了不属于当前商品的图片: ${assetId}`);
     }
+    if (asset.role === 'reference') {
+      throw new TaskValidationError(`参考图仅用于视觉参考，不能作为任务商品素材: ${assetId}`);
+    }
   }
 
   const id = crypto.randomUUID();

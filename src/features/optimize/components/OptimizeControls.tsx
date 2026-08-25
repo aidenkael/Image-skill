@@ -18,7 +18,7 @@ export function OptimizeControls({ options, assets, busy, onChange, onRun }: Opt
         <label className="field-label" htmlFor="optimize-source">源商品图</label>
         <select id="optimize-source" className="input" value={options.sourceAssetId} onChange={(event) => onChange({ sourceAssetId: event.target.value })}>
           <option value="">请选择一张图片</option>
-          {assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+          {assets.filter((asset) => asset.role !== 'reference').map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
         </select>
       </div>
       <Choice label="比例" values={[

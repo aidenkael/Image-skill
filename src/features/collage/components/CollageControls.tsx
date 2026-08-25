@@ -15,6 +15,7 @@ interface CollageControlsProps {
   count: number;
   templates: TemplateDocument[];
   selectedCount: number;
+  selectedAssetIds: string[];
   busy: boolean;
   collageDoc: TemplateDocument | null;
   assets: AssetRef[];
@@ -31,6 +32,7 @@ export function CollageControls({
   count,
   templates,
   selectedCount,
+  selectedAssetIds,
   busy,
   collageDoc,
   assets,
@@ -44,9 +46,12 @@ export function CollageControls({
   const imageSlots =
     collageDoc?.layers.filter((l) => l.type === 'image') ?? [];
   const suggestions = intelligence?.plan.collage ?? null;
+  const hasReferenceSelection = selectedAssetIds.some(
+    (id) => assets.find((asset) => asset.id === id)?.role === 'reference',
+  );
 
   function applyRecommendedCopy() {
-    const title = suggestions?.titleOptions[0] ?? '';
+    const title = suggestions?.titleOptions[0]?.text ?? '';
     const sellingPoints = (suggestions?.sellingPoints ?? []).slice(0, 3).map((item) => item.text);
     onChange({
       title,
@@ -63,8 +68,8 @@ export function CollageControls({
         {suggestions ? (
           <>
             <div className="suggestion-chips">
-              {suggestions.titleOptions.map((title) => (
-                <button key={title} type="button" onClick={() => onChange({ title, includeTitle: true })}>{title}</button>
+              {suggestions.titleOptions.map((claim) => (
+                <button key={claim.text} type="button" onClick={() => onChange({ title: claim.text, includeTitle: true })}>{claim.text}</button>
               ))}
             </div>
             <div className="selling-suggestions">
@@ -177,7 +182,7 @@ export function CollageControls({
         <button
           type="button"
           className="btn btn-primary"
-          disabled={busy || selectedCount === 0}
+          disabled={busy || selectedCount === 0 || hasReferenceSelection}
           onClick={onCreateLayout}
         >
           {busy ? '创建中…' : '创建布局'}
@@ -193,6 +198,11 @@ export function CollageControls({
         {selectedCount === 0 && (
           <div className="hint">请先在左侧选择商品图片</div>
         )}
+        {hasReferenceSelection ? (
+          <div className="hint">
+            参考图仅用于视觉方向，请取消选择参考图后再创建组合卖点图。
+          </div>
+        ) : null}
       </div>
 
       {imageSlots.length > 0 && (
@@ -209,7 +219,7 @@ export function CollageControls({
                 }}
               >
                 <option value="">未选择</option>
-                {assets.map((a) => (
+                {assets.filter((asset) => asset.role !== 'reference').map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
                   </option>
