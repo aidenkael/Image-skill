@@ -51,6 +51,41 @@ export interface WorkbenchModel {
 
 const EMPTY_DRAFT = WorkspaceDraftSchema.parse({});
 
+/** runHero 完成后的状态更新集（字段缺省表示不改动对应状态） */
+export interface HeroRunStatePatch {
+  tasks: TaskRecord[];
+  latestHeroTask: TaskRecord;
+  latestHeroTaskId: string;
+  error?: string | null;
+  notice?: string | null;
+}
+
+/**
+ * 计算 runHero 完成后的状态更新：
+ * - 异步结果已不属于活动工作区（工作区已切换）时返回 null，陈旧结果一律丢弃；
+ * - 否则无论任务成功还是失败，该任务都成为当前最新 Hero 任务，
+ *   保证 latestHeroTask / latestHeroTaskId（草稿持久化）与错误提示指向同一任务。
+ */
+export function heroRunStatePatch(
+  activeWorkspaceId: string | null,
+  requestWorkspaceId: string,
+  task: TaskRecord,
+  taskList: TaskRecord[],
+): HeroRunStatePatch | null {
+  if (activeWorkspaceId !== requestWorkspaceId) return null;
+  const patch: HeroRunStatePatch = {
+    tasks: taskList,
+    latestHeroTask: task,
+    latestHeroTaskId: task.id,
+  };
+  if (task.status === 'failed') {
+    patch.error = task.error ?? '生成失败';
+  } else if (task.status === 'succeeded') {
+    patch.notice = `氛围主图生成完成，共 ${task.result?.outputs.length ?? 0} 张`;
+  }
+  return patch;
+}
+
 export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const [assets, setAssets] = useState<AssetRef[]>([]);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
@@ -282,15 +317,18 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
         options: heroOptions,
       });
       const taskList = await listTasks(currentWorkspaceId);
-      if (activeWorkspaceRef.current !== currentWorkspaceId) return null;
-      setTasks(taskList);
-      if (task.status === 'failed') {
-        setError(task.error ?? '生成失败');
-      } else if (task.status === 'succeeded') {
-        setLatestHeroTask(task);
-        setLatestHeroTaskId(task.id);
-        setNotice(`氛围主图生成完成，共 ${task.result?.outputs.length ?? 0} 张`);
-      }
+      const patch = heroRunStatePatch(
+        activeWorkspaceRef.current,
+        currentWorkspaceId,
+        task,
+        taskList,
+      );
+      if (!patch) return null;
+      setTasks(patch.tasks);
+      setLatestHeroTask(patch.latestHeroTask);
+      setLatestHeroTaskId(patch.latestHeroTaskId);
+      if (patch.error !== undefined) setError(patch.error);
+      if (patch.notice !== undefined) setNotice(patch.notice);
       return task;
     } catch (reason) {
       if (activeWorkspaceRef.current === currentWorkspaceId) {
