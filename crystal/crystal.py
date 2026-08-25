@@ -633,9 +633,11 @@ def compose_representatives(
     placements,
     output_path,
     workdir,
+    progress_callback=None,
 ):
     """N 次独立局部编辑（全部针对同一张干净 base）+ 确定性局部合并。
-    这是规划式生产工作，不是重试循环；任何编辑产物都不进入另一次编辑。"""
+    这是规划式生产工作，不是重试循环；任何编辑产物都不进入另一次编辑。
+    progress_callback(i, total) 仅为桌面端进度提示可选钩子；缺省不传时 CLI 行为不变。"""
     if len(representative_assets) != len(placements):
         raise ValueError("代表参考数量与 placements 数量不一致")
 
@@ -643,8 +645,11 @@ def compose_representatives(
     workdir.mkdir(parents=True, exist_ok=True)
 
     edited_paths = []
+    total = len(placements)
 
     for i, placement in enumerate(placements, 1):
+        if progress_callback:
+            progress_callback(i, total)
         ref_index = placement["reference_index"]
         asset = representative_assets[ref_index - 1]
 

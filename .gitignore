@@ -17,6 +17,11 @@
 crystal/tests/outputs/*
 !crystal/tests/outputs/.gitkeep
 
+# === Crystal desktop packaging ===
+crystal/build/
+crystal/dist/
+crystal/*.spec
+
 # === Test Sample Images (supplier product photos) ===
 tests/samples/*.jpg
 tests/samples/*.jpeg

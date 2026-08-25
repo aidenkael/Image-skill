@@ -1,4 +1,4 @@
-# crystal — 水晶手镯参考图技能
+# crystal — 水晶手镯参考图（独立桌面应用）
 
 输入一张手镯实拍图，输出一张"人工摆拍 + 手工标注"感的珠宝参考照片：
 完整手镯为主体，每组视觉可区分的非金属珠/石/珍珠组件（bead_groups）各取一个代表件，
@@ -6,17 +6,52 @@
 `bbox_list` 只框 Image 2 目标区域，`visual_identity` 绑定进插入 prompt），
 Pillow 羽毛合并仅合并被编辑的局部区域，小字楷体中文注记（可带细引线）。
 
-## 主流水线（planned multi-stage, zero-retry）
+## 使用方式（普通用户）
+
+**双击 `crystal/Crystal.bat`**（源码运行，需 Python 3），或运行打包后的
+`crystal/dist/Crystal/Crystal.exe`（见下方"打包"，无需 Python）。
+
+主流程：
 
 ```
-fresh analysis
-→ base: 1 Qwen call（qwen-image-3.0-pro；完整手镯 + 空场景，不生成任何散珠/道具）
-→ mandatory base QA gate（FAIL 则停止，不跑 compose）
-→ Agent writes placements once（每组恰好一个摆放框）
+上传手镯原图 → 选择/管理背景库 → 输入一句自然语言要求
+→ 配置/测试 API → 点击生成预览图 → 查看进度 → 预览成品 → 保存成品
+```
+
+- **上传原图**：JPG / JPEG / PNG / WebP。
+- **背景库**：`crystal/templates/` 是实时背景文件夹，任意数量、任意文件名
+  （现有 `01.jpg`…`06.jpg` 只是初始文件，不是固定白名单）。界面上可
+  `添加背景` / `删除背景` / `打开背景文件夹`；在文件夹里直接增删图片也会
+  每秒自动刷新。零背景时生成按钮禁用。
+- **自然语言要求**：例如"3种珠子，两种圆珠，一种方珠"；留空则按图像可见证据分组。
+- **API 设置**：`DASHSCOPE_API_KEY` 必填；`sk-sp-` Token Plan key 可不填图像 API URL，
+  其余 key 必须填写图像 API URL；视觉 API URL 可选。`测试连接` 只发一次最小视觉请求，
+  不触发图像生成。Key 以掩码显示，只保存在用户配置目录，绝不写入仓库。
+- **生成**：一键完成 源图视觉分析 → Qwen base 场景 → 视觉 base QA + 珠位规划
+  → N 次独立 Wan 局部编辑 + 确定性合并 → 可选珠子名称标注。进度实时显示；
+  失败给出中文原因，不自动重试。
+- **保存成品**：即"下载/导出"；`打开输出文件夹` 可查看本次运行的全部中间产物。
+
+### 用户数据位置（不写入仓库）
+
+| 内容 | 位置 |
+|---|---|
+| 配置（含 API Key） | `%APPDATA%\Crystal\config.json` |
+| 每次运行产物 | `%LOCALAPPDATA%\Crystal\runs\<时间戳-短ID>\` |
+
+运行目录包含：`source.*`、`background.*`、`request.json`（不含密钥）、
+`analysis.json`、`base.png`、`placements.json`、`candidate.png`、`final.png`，
+失败时另有 `error.txt`。这些文件由应用自动产生与消费，**用户无需手写任何 JSON**。
+
+## 流水线（planned multi-stage, zero-retry）
+
+```
+视觉源图分析（自动，含用户自然语言约束）
+→ base: 1 Qwen call（qwen-image-3.0-pro；完整手镯 + 所选背景，不生成任何散珠/道具）
+→ 视觉 base QA 门（FAIL 则停止，不跑 compose）+ 自动珠位规划
 → N independent Wan local edits, all against the same clean base
 → Pillow feather-merges only edited local regions
-→ final QA
-→ Pillow labels once
+→ 确定性 Pillow 标注（可勾选关闭）
 ```
 
 代表件生成独立而非顺序：先前代表件永远不可能污染后续代表件；
@@ -24,66 +59,61 @@ fresh analysis
 局部合并是场景区域合并（模型已渲染好代表件及其阴影/反射），不是水晶抠图合成，无 rembg/分割；
 多次调用是有意设计的阶段，不是重试；计划成本 = `1 + N` 次图像模型调用；任一阶段失败即返回失败。
 
-已移除的旧路径：一次性多参考图合成、顺序画布插入（后续调用消费先前插入结果，身份污染）、
-qwen-image-3.0-pro contact sheet、rembg 本地抠图合成。
-
-## 安装
+## 安装（源码运行）
 
 ```
 pip install -r crystal/requirements.txt
 ```
 
-凭证经 `.env`/环境变量（不硬编码）：仅 `DASHSCOPE_API_KEY`，无其他回退；
-端点解析：`DASHSCOPE_API_URL` 优先，`sk-sp-` key 走 Token Plan 端点（见根 `.env.example`），
-非 Token Plan 凭证且未配置 `DASHSCOPE_API_URL` 时直接失败（不猜测 Wan workspace 端点）；
-Crystal 双模型分工：base 场景 = `CRYSTAL_BASE_MODEL`（默认 `qwen-image-3.0-pro`）；
-代表件独立局部编辑 = `CRYSTAL_IMAGE_MODEL`（默认 `wan2.7-image-pro`）；失败即失败，不回退重试；
-不使用 `QWEN_EDIT_MODEL`，那是 ecom-shot 的配置）。
+模型分工：基础场景 = `CRYSTAL_BASE_MODEL`（默认 `qwen-image-3.0-pro`）；
+代表件独立局部编辑 = `CRYSTAL_IMAGE_MODEL`（默认 `wan2.7-image-pro`）；
+视觉理解 = `qwen3.7-plus`（OpenAI compatible-mode，`sk-sp-` key 自动走 Token Plan 端点）；
+失败即失败，不回退重试。
 
-## 用法
+## 打包（开发者）
 
 ```
-# 1) Agent 识别后写 analysis.json：
-#    bracelet_bbox_1000 = 完整可见手镯产品范围（含金属配件，排除包装/托盘/手/纸张）；
-#    bead_groups = 手镯上视觉可区分的非金属珠/石/珍珠组件（物理上属于该手镯）：
-#    允许透视/光照/珠间自然差异后设计层面可见身份仍等价才同组；几何/物理尺寸/颜色/透明度/
-#    内含物/纹理/表面任一出现清晰可见设计差异，MUST 分为不同组；
-#    每组 {"display_name": 中文标注名, "visual_identity": 可见外观自由文本, "representative_bbox_1000": 代表矩形}，无 group_id；
-#    display_name 只用于标注，绝不进入生成 Prompt
-#    组数 = 当前源图新鲜判定（不硬编码、不复用历史运行）
+crystal\build_exe.bat
+```
 
-# 2) base 阶段：恰好一次干净场景生成（无散珠/无道具），代表资产留存 workdir
-python crystal/crystal.py base --input src.jpg \
-    --analysis analysis.json --output base.png --workdir work
+使用 PyInstaller（仅构建期依赖，不在 `requirements.txt`）生成
+`crystal/dist/Crystal/Crystal.exe`（无控制台、无需 Python）。
+`templates/` 作为 **exe 旁的可编辑外部文件夹** 一并复制：
+他人增删背景无需重新打包。配置/运行产物仍落在各用户 AppData。
 
-# 2.5) 强制 base QA 门：目视 base——恰好一条完整手镯、无散珠/散石/散珍珠/
-#      多余金属件/文字/虚构道具；FAIL 则停止（不写 placements、不跑 compose）
+打包/源码冒烟（不开 GUI、不联网）：
 
-# 3) base PASS 后 Agent 一次性写 placements.json：
-#    每组恰好一个框，reference_index 1..N 各一次，0..1000 归一化，
-#    不压手镯、不刻意重叠、框尺寸匹配组件真实尺度、手工摆放感（非行/网格/等距/弧线）
-
-# 4) compose 阶段：N 次独立局部编辑（同一干净 base）+ 确定性羽毛合并
-python crystal/crystal.py compose --input base.png --source src.jpg \
-    --analysis analysis.json --placements placements.json \
-    --output candidate.png --workdir work
-
-# 5) Agent 目视 QA 候选图后写 labels.json（小字就近标注，可选 point_to 引线）
-python crystal/crystal.py label --input candidate.png \
-    --labels labels.json --output final.png
+```
+app.py --smoke-test        # 或 dist\Crystal\Crystal.exe --smoke-test
 ```
 
 ## 结构
 
 | 文件 | 内容 |
 |---|---|
-| `crystal.py` | 唯一运行时入口（base / compose / label） |
-| `SKILL.md` | Agent 工作流与风格约束 |
-| `templates/04.jpg` | 当前唯一批准场景模板 |
-| `tests/test_crystal.py` | 本地验证（无网络） |
+| `app.py` | 桌面 GUI（Tkinter，仅 UI）+ `--smoke-test` |
+| `desktop_core.py` | 配置 / 动态背景库 / 视觉理解 / 单一生成编排 |
+| `crystal.py` | 图像生产核心（唯一图像管线；CLI 为开发者后备入口） |
+| `Crystal.bat` | 桌面 GUI 源码启动器（双击入口） |
+| `build_exe.bat` | 开发者打包入口 |
+| `templates/` | 实时背景库（用户可自由增删） |
+| `SKILL.md` | 开发/内部低层参考（非用户运行时） |
+| `tests/test_crystal.py`、`tests/test_desktop.py` | 本地验证（无网络） |
+
+## 开发者后备：CLI
+
+桌面应用内部复用同一核心；调试时可手动分阶段执行
+（`analysis.json` / `placements.json` 等为开发者调试文件，普通用户流程不需要）：
+
+```
+python crystal/crystal.py base    --input src.jpg --analysis a.json --output base.png --workdir work
+python crystal/crystal.py compose --input base.png --source src.jpg --analysis a.json --placements p.json --output candidate.png --workdir work
+python crystal/crystal.py label   --input candidate.png --labels l.json --output final.png
+```
 
 ## 测试
 
 ```
 python crystal/tests/test_crystal.py
+python -m unittest discover -s crystal/tests -p "test_desktop.py"
 ```
