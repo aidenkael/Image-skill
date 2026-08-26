@@ -30,13 +30,13 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
   if (assetCount === 0) {
     return (
       <section className="insight-bar insight-empty">
-        上传商品图后，AI 可分析商品并推荐拍摄方向。
+        上传商品图后可分析商品并获取专属创意方向；不分析也可以直接使用 AI 自由创作。
       </section>
     );
   }
   if (loading) return <section className="insight-bar">正在读取商品分析…</section>;
   if (analyzing) {
-    return <section className="insight-bar is-working">正在理解商品与规划视觉方向…</section>;
+    return <section className="insight-bar is-working">正在理解商品与规划专属创意方向… 切换任务或商品不会中断。</section>;
   }
 
   return (
@@ -56,7 +56,7 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
             </div>
             {!fresh ? (
               <div className="insight-warning">
-                上次分析使用的素材已变化，请重新分析后再使用 AI 推荐方向。
+                上次分析使用的素材已变化，请重新分析后再使用商品专属方向。
               </div>
             ) : hasUnanalyzedAssets ? (
               <div className="insight-note">有新素材未参与上次分析，可按当前选择重新分析。</div>
@@ -75,7 +75,7 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
         <div className="insight-summary">
           <div>
             <strong>AI 尚未分析商品</strong>
-            <p>选择 1–9 张商品图后点击分析。</p>
+            <p>分析商品可获得专属创意方向；不分析也可以直接使用 AI 自由创作。</p>
           </div>
           <button
             type="button"

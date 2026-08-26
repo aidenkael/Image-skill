@@ -1,46 +1,49 @@
 'use client';
 
 import type { AssetRef } from '@/core/assets';
+import { fetchJson } from '@/features/shared/http';
 
 /**
  * 资源 API 客户端。
  */
 
-async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error ?? `请求失败 HTTP ${res.status}`);
-  }
-  return res.json() as Promise<T>;
-}
-
 export async function listAssets(workspaceId: string): Promise<AssetRef[]> {
   const url = `/api/workspaces/${encodeURIComponent(workspaceId)}/assets`;
-  return (await json<{ assets: AssetRef[] }>(await fetch(url))).assets;
+  return (await fetchJson<{ assets: AssetRef[] }>(url)).assets;
 }
 
-export async function uploadAssets(workspaceId: string, files: File[]): Promise<AssetRef[]> {
+export async function uploadAssets(
+  workspaceId: string,
+  files: File[],
+): Promise<{ assets: AssetRef[]; createdIds: string[] }> {
   const form = new FormData();
   for (const file of files) form.append('files', file);
-  const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/assets`, {
+  return fetchJson<{ assets: AssetRef[]; createdIds: string[] }>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/assets`, {
     method: 'POST',
     body: form,
-  });
-  return (await json<{ assets: AssetRef[] }>(res)).assets;
+    },
+  );
 }
 
 export async function patchAssetRole(
   workspaceId: string,
   id: string,
   role: AssetRef['role'],
-): Promise<AssetRef> {
-  const res = await fetch(
+): Promise<AssetRef[]> {
+  return (await fetchJson<{ assets: AssetRef[] }>(
     `/api/workspaces/${encodeURIComponent(workspaceId)}/assets/${encodeURIComponent(id)}`,
     {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role }),
     },
-  );
-  return (await json<{ asset: AssetRef }>(res)).asset;
+  )).assets;
+}
+
+export async function removeAsset(workspaceId: string, id: string): Promise<AssetRef[]> {
+  return (await fetchJson<{ assets: AssetRef[] }>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/assets/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  )).assets;
 }

@@ -7,6 +7,8 @@ import {
   ProviderConfigError,
   ProviderRequestError,
 } from './image-provider';
+import { providerFetchError, providerHttpError } from './provider-errors';
+import { resolveAICredential } from '@/server/settings/ai';
 
 /**
  * DashScope / 阿里云百炼 qwen-image-3.0-pro 图片编辑 Provider。
@@ -35,18 +37,19 @@ export function resolveDashScopeApiUrl(apiKey: string): string {
 
 export class AliyunQwenImageProvider implements ImageProvider {
   async generate(input: ImageGenerationInput): Promise<GeneratedImage[]> {
-    const apiKey = process.env.DASHSCOPE_API_KEY;
-    if (!apiKey) {
+    const credential = await resolveAICredential();
+    if (!credential) {
       throw new ProviderConfigError(
-        '未配置 DASHSCOPE_API_KEY：请复制 .env.example 为 .env 并填入 DashScope API Key 后再生成',
+        'AI 尚未配置，请在工作台 AI 设置中保存 Key，或配置 DASHSCOPE_API_KEY。',
       );
     }
+    const apiKey = credential.apiKey;
 
     let imageData: Buffer;
     try {
       imageData = await fs.readFile(input.imagePath);
     } catch {
-      throw new ProviderRequestError(`读取输入图片失败: ${input.imagePath}`);
+      throw new ProviderRequestError('无法读取源商品图片，请重新选择后重试。');
     }
     const ext = path.extname(input.imagePath).slice(1).toLowerCase();
     const mime = MIME_BY_EXT[ext] ?? 'image/png';
@@ -73,19 +76,24 @@ export class AliyunQwenImageProvider implements ImageProvider {
 
     const url = resolveDashScopeApiUrl(apiKey);
     // 不打印 API Key，不打印 base64 图片体
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(180_000),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(180_000),
+      });
+    } catch (error) {
+      throw providerFetchError(error);
+    }
 
     if (!res.ok) {
-      const text = (await res.text()).slice(0, 500);
-      throw new ProviderRequestError(`图片模型调用失败 HTTP ${res.status}: ${text}`);
+      console.error('[qwen image] upstream request failed', { status: res.status });
+      throw providerHttpError(res.status);
     }
 
     const body = (await res.json()) as Record<string, unknown>;
@@ -106,7 +114,7 @@ export class AliyunQwenImageProvider implements ImageProvider {
     }
 
     if (images.length === 0) {
-      throw new ProviderRequestError('模型响应中未找到生成图片');
+      throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
     }
     return images.slice(0, input.count);
   }

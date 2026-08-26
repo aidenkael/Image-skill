@@ -3,7 +3,13 @@ import type {
   ProductIntelligenceInput,
   ProductIntelligenceProvider,
 } from './vision-provider';
-import { ProviderConfigError, ProviderRequestError } from './provider-errors';
+import {
+  invalidProviderResponse,
+  providerFetchError,
+  providerHttpError,
+  ProviderConfigError,
+} from './provider-errors';
+import { resolveAICredential } from '@/server/settings/ai';
 
 export const QWEN_VISION_MODEL = 'qwen3.7-plus';
 export const DEFAULT_VISION_API_URL =
@@ -37,13 +43,18 @@ Reference-role images are aesthetic references only and must never appear in
 evidenceAssetIds for visible facts, visible text, collage titles or collage
 selling points.
 
-Hero directions may alter scene, lighting, composition and human interaction
-only. They must preserve product identity, shape, proportion, color, pattern,
+Hero concepts must preserve product identity, shape, proportion, color, pattern,
 logo/text, visible material appearance, structure, count, accessories,
 ports/hardware and function.
 
-Return 1 to 3 commercially distinct Hero directions.
-Use only supplied asset ids for sourceAssetId.
+Return 1 to 3 product-specific open creative Hero concepts.
+Do not classify concepts into a predefined scene/style/person taxonomy.
+Do not force or forbid people unless the product and concept justify it.
+Freely choose the most effective artistic/commercial treatment for this specific product.
+Each concept must contain id, title in Simplified Chinese,
+recommendedSourceAssetId, creativeBrief in Simplified Chinese,
+prompt in English, and reason in Simplified Chinese.
+Use only supplied non-reference asset ids for recommendedSourceAssetId.
 Use ids hero-1, hero-2, hero-3 in order.`;
 
 function userPrompt(workspaceName: string): string {
@@ -59,7 +70,7 @@ analysis:
   unverifiedFacts[]
   assetObservations[]
 plan:
-  heroDirections[]
+  heroConcepts[]
   collage:
     titleOptions[] as { text, evidenceAssetIds[] }
     sellingPoints[] as { text, evidenceAssetIds[] }
@@ -89,12 +100,13 @@ function responseText(content: unknown): string {
 
 export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
   async analyze(input: ProductIntelligenceInput) {
-    const apiKey = process.env.DASHSCOPE_API_KEY;
-    if (!apiKey) {
+    const credential = await resolveAICredential();
+    if (!credential) {
       throw new ProviderConfigError(
-        '未配置 DASHSCOPE_API_KEY：请在项目 .env 中配置后重新启动工作台',
+        'AI 尚未配置，请在工作台 AI 设置中保存 Key，或配置 DASHSCOPE_API_KEY。',
       );
     }
+    const apiKey = credential.apiKey;
 
     const content = input.assets.flatMap((asset) => [
       { type: 'text', text: `assetId=${asset.assetId}; role=${asset.role}` },
@@ -107,44 +119,85 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
     ]);
     content.push({ type: 'text', text: userPrompt(input.workspaceName) });
 
-    const response = await fetch(resolveVisionApiUrl(apiKey), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: QWEN_VISION_MODEL,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content },
-        ],
-        response_format: { type: 'json_object' },
-        enable_thinking: false,
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(120_000),
-    });
+    let response: Response;
+    try {
+      response = await fetch(resolveVisionApiUrl(apiKey), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: QWEN_VISION_MODEL,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content },
+          ],
+          response_format: { type: 'json_object' },
+          enable_thinking: false,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (error) {
+      throw providerFetchError(error);
+    }
 
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 500);
-      throw new ProviderRequestError(`商品分析请求失败 HTTP ${response.status}: ${detail}`);
+      console.error('[qwen vision] upstream request failed', { status: response.status });
+      throw providerHttpError(response.status);
     }
 
     let body: unknown;
     try {
       body = await response.json();
     } catch {
-      throw new ProviderRequestError('商品分析响应不是有效 JSON');
+      throw invalidProviderResponse();
     }
     const choices = (body as { choices?: Array<{ message?: { content?: unknown } }> })?.choices;
     const raw = responseText(choices?.[0]?.message?.content).trim();
-    if (!raw) throw new ProviderRequestError('商品分析响应内容为空');
+    if (!raw) throw invalidProviderResponse();
 
     try {
       return ProductIntelligencePayloadSchema.parse(JSON.parse(raw));
     } catch {
-      throw new ProviderRequestError('商品分析响应不符合结构化数据要求');
+      throw invalidProviderResponse();
     }
+  }
+}
+
+export async function testVisionConnection(): Promise<void> {
+  const credential = await resolveAICredential();
+  if (!credential) {
+    throw new ProviderConfigError('AI 尚未配置，请先保存 Key 或配置 DASHSCOPE_API_KEY。');
+  }
+  let response: Response;
+  try {
+    response = await fetch(resolveVisionApiUrl(credential.apiKey), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${credential.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: QWEN_VISION_MODEL,
+        messages: [{ role: 'user', content: 'Reply with OK only.' }],
+        enable_thinking: false,
+        max_tokens: 4,
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    throw providerFetchError(error);
+  }
+  if (!response.ok) {
+    console.error('[qwen vision test] upstream request failed', { status: response.status });
+    throw providerHttpError(response.status);
+  }
+  try {
+    await response.json();
+  } catch {
+    throw invalidProviderResponse();
   }
 }

@@ -36,6 +36,18 @@ export function Workbench() {
   const workspaceId = workspaces.activeWorkspaceId;
   const collageDoc = wb.collageVariants[wb.activeCollageVariant] ?? null;
   const freshIntelligence = intelligence.fresh ? intelligence.record : null;
+  const lockedAssetIds = new Set<string>();
+  for (const id of intelligence.lockedAssetIds) lockedAssetIds.add(id);
+  if (wb.latestHeroTask?.status === 'running') {
+    for (const id of wb.latestHeroTask.request.assetIds) lockedAssetIds.add(id);
+  } else if (wb.heroBusy && wb.heroOptions.sourceAssetId) {
+    lockedAssetIds.add(wb.heroOptions.sourceAssetId);
+  }
+  const currentBusy = wb.kind === 'hero'
+    ? wb.heroBusy
+    : wb.kind === 'collage'
+      ? wb.collageBusy
+      : wb.optimizeBusy;
 
   useEffect(() => {
     if (wb.hydrated && wb.kind === 'detail') wb.setKind('hero');
@@ -50,11 +62,13 @@ export function Workbench() {
 
   const handleAnalyze = useCallback(async () => {
     const record = await intelligence.analyze(wb.selectedAssetIds);
-    const firstDirection = record?.plan.heroDirections[0];
-    if (!firstDirection || wb.heroOptions.sceneMode !== 'auto') return;
+    const firstConcept = record?.plan.heroConcepts[0];
+    if (!firstConcept || wb.heroOptions.creativeMode !== 'concept') return;
     wb.patchHeroOptions({
-      directionId: firstDirection.id,
-      ...(wb.heroOptions.sourceAssetId ? {} : { sourceAssetId: firstDirection.sourceAssetId }),
+      conceptId: firstConcept.id,
+      ...(wb.heroOptions.sourceAssetId ? {} : {
+        sourceAssetId: firstConcept.recommendedSourceAssetId,
+      }),
     });
   }, [intelligence, wb]);
 
@@ -97,6 +111,17 @@ export function Workbench() {
     const currentDoc = editor?.getDocument();
     if (!editor || !currentDoc) return;
     const sanitized = removeAssetFromCollageDocument(currentDoc, updated.id);
+    wb.replaceActiveCollageVariant(sanitized);
+    await editor.createLayout(sanitized);
+  }, [wb]);
+
+  const handleRemoveAsset = useCallback(async (id: string) => {
+    const removed = await wb.removeAsset(id);
+    if (!removed) return;
+    const editor = collageEditorRef.current;
+    const currentDoc = editor?.getDocument();
+    if (!editor || !currentDoc) return;
+    const sanitized = removeAssetFromCollageDocument(currentDoc, id);
     wb.replaceActiveCollageVariant(sanitized);
     await editor.createLayout(sanitized);
   }, [wb]);
@@ -150,7 +175,9 @@ export function Workbench() {
         kind={wb.kind}
         hydrated={wb.hydrated}
         createOpen={createOpen}
-        aiConfigured={systemStatus.aiConfigured}
+        aiStatus={systemStatus.status}
+        heroRunning={wb.heroBusy}
+        onAIStatusChange={systemStatus.setStatus}
         onCreateOpenChange={setCreateOpen}
         onKindChange={wb.setKind}
       />
@@ -173,10 +200,13 @@ export function Workbench() {
             workspaceId={workspaceId}
             assets={wb.assets}
             selectedIds={wb.selectedAssetIds}
-            busy={wb.busy}
+            uploading={wb.uploading}
+            lockedIds={lockedAssetIds}
+            mutatingIds={wb.assetMutatingIds}
             onUpload={wb.upload}
             onToggle={wb.toggleAsset}
             onSetRole={(id, role) => void handleSetRole(id, role)}
+            onRemove={(id) => void handleRemoveAsset(id)}
           />
 
           <main className="center-column">
@@ -220,7 +250,8 @@ export function Workbench() {
                 assets={wb.assets}
                 intelligence={freshIntelligence}
                 count={wb.heroCount}
-                busy={wb.busy}
+                busy={wb.heroBusy}
+                aiConfigured={Boolean(systemStatus.status?.configured)}
                 onChange={wb.patchHeroOptions}
                 onCountChange={wb.setHeroCount}
                 onGenerate={() => void wb.runHero()}
@@ -233,7 +264,7 @@ export function Workbench() {
                 templates={templates}
                 selectedCount={wb.selectedAssetIds.length}
                 selectedAssetIds={wb.selectedAssetIds}
-                busy={wb.busy}
+                busy={wb.collageBusy}
                 collageDoc={collageDoc}
                 assets={wb.assets}
                 intelligence={freshIntelligence}
@@ -245,9 +276,9 @@ export function Workbench() {
               />
             ) : null}
             {wb.kind === 'optimize' ? (
-              <OptimizeControls options={wb.optimizeOptions} assets={wb.assets} busy={wb.busy} onChange={wb.patchOptimizeOptions} onRun={() => void wb.runOptimize()} />
+              <OptimizeControls options={wb.optimizeOptions} assets={wb.assets} busy={wb.optimizeBusy} onChange={wb.patchOptimizeOptions} onRun={() => void wb.runOptimize()} />
             ) : null}
-            <StatusBar busy={wb.busy} error={wb.error} notice={wb.notice} />
+            <StatusBar busy={currentBusy} error={wb.error ?? systemStatus.error} notice={wb.notice} />
           </aside>
         </div>
       )}

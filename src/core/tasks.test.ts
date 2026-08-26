@@ -6,7 +6,12 @@ const validHero = {
   kind: 'hero',
   assetIds: ['a1'],
   count: 2,
-  options: { sourceAssetId: 'a1', ratio: '1:1', person: 'auto', sceneMode: 'auto' },
+  options: {
+    sourceAssetId: 'a1',
+    ratio: '1:1',
+    creativeMode: 'free',
+    humanPresence: 'auto',
+  },
 };
 
 const validCollage = {
@@ -94,6 +99,44 @@ describe('任务请求校验（count 按任务类型限制）', () => {
     expect(() =>
       validateCreateTaskRequest({ ...validHero, assetIds: ['a1', 'a2'] }, ctx),
     ).toThrow(/只能提交一张/);
+  });
+
+  it('Hero 三种创作模式按需校验，free 不依赖分析字段', () => {
+    expect(validateCreateTaskRequest(validHero, ctx).options).toMatchObject({
+      creativeMode: 'free',
+      humanPresence: 'auto',
+    });
+    expect(() => validateCreateTaskRequest({
+      ...validHero,
+      options: { ...validHero.options, creativeMode: 'concept' },
+    }, ctx)).toThrow(/请选择一个商品专属创意方向/);
+    expect(validateCreateTaskRequest({
+      ...validHero,
+      options: { ...validHero.options, creativeMode: 'concept', conceptId: 'hero-1' },
+    }, ctx).kind).toBe('hero');
+    expect(() => validateCreateTaskRequest({
+      ...validHero,
+      options: { ...validHero.options, creativeMode: 'custom', creativeIntent: '  ' },
+    }, ctx)).toThrow(/请填写你的创作想法/);
+    expect(validateCreateTaskRequest({
+      ...validHero,
+      options: { ...validHero.options, creativeMode: 'custom', creativeIntent: '雨夜故事感' },
+    }, ctx).kind).toBe('hero');
+  });
+
+  it('旧 scene/person 字段不会进入活动 Hero 选项', () => {
+    const parsed = validateCreateTaskRequest({
+      ...validHero,
+      options: {
+        ...validHero.options,
+        sceneMode: 'prompt',
+        scenePrompt: '旧场景',
+        person: 'hand',
+      },
+    }, ctx);
+    expect(parsed.options).not.toHaveProperty('sceneMode');
+    expect(parsed.options).not.toHaveProperty('scenePrompt');
+    expect(parsed.options).not.toHaveProperty('person');
   });
 
   it('非法 options（缺必填字段）被拒绝', () => {

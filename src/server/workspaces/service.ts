@@ -77,6 +77,13 @@ export async function createWorkspace(name: string): Promise<Workspace> {
   return workspace;
 }
 
+export async function deleteWorkspace(workspaceId: string): Promise<boolean> {
+  const workspace = await getWorkspace(workspaceId);
+  if (!workspace) return false;
+  await fs.rm(workspaceRuntimePath(workspaceId), { recursive: true, force: false });
+  return true;
+}
+
 export async function readWorkspaceDraft(workspaceId: string): Promise<WorkspaceDraft> {
   const filePath = workspaceRuntimePath(workspaceId, 'draft.json');
   if (!(await exists(filePath))) return WorkspaceDraftSchema.parse({});

@@ -7,7 +7,7 @@ SHEIN 类电商商品视觉工作台 V1：在浏览器里完成商品理解、**
 ## V1 范围
 
 - ✅ **商品理解**：用户选择 1–9 张图片并显式触发 qwen3.7-plus 分析，结构化结果与 Visual Plan 按 Workspace 保存
-- ✅ **氛围主图（hero）**：选择 AI 推荐方向或自定义场景 → qwen-image-3.0-pro 场景生成（商品保真）
+- ✅ **氛围主图（hero）**：默认 AI 自由创作，也可选择分析得到的商品专属方向或输入自定义想法；人物仅作可选覆盖 → qwen-image-3.0-pro 生成（商品保真）
 - ✅ **组合卖点图（collage）**：可选用有图片依据的文案建议；Fabric.js 确定性排版、独立编辑并导出 PNG（服务端不调用 AI）
 - ✅ **简单优化（optimize）**：Sharp 确定性缩放、裁切、背景填充与格式转换（不调用 AI）
 - 🕐 **详情页图（detail）**与批量流水线：后续阶段
@@ -28,7 +28,7 @@ SHEIN 类电商商品视觉工作台 V1：在浏览器里完成商品理解、**
 pnpm install
 
 # 2. 配置密钥（复制模板后填入）
-cp .env.example .env   # 至少填写 DASHSCOPE_API_KEY
+cp .env.example .env   # 可在 .env 或工作台右上角 AI 设置中填写 Key
 
 # 3. 启动开发服务器
 pnpm dev              # http://localhost:3000
@@ -44,11 +44,11 @@ pnpm build            # 类型检查 + 生产构建
 2. **上传商品图**（左侧面板，支持拖拽，JPEG/PNG/WebP，≤20MB）
 3. **AI 分析商品**（显式点击，不会在上传、刷新或切换商品时自动付费调用）
 4. **切换任务**（顶部：氛围主图 / 组合卖点图 / 简单优化；详情页图仅标记为后续）
-5. **氛围主图**：选择推荐方向或自定义方向 → 源图 / 数量 / 比例 / 人物 → 生成；
-   每张结果可单独下载；刷新页面后自动恢复最近一次生成结果
+5. **氛围主图**：选择源图 → 默认 AI 自由创作，或选择商品专属方向 / 输入自定义想法 → 可选人物参与 → 数量 / 比例 → 生成；
+   每张结果可单独下载；生成中可切换任务或商品，返回与刷新后会恢复状态并继续轮询
 6. **组合卖点图**：可应用有图片依据的建议或手动编辑 → 创建布局 → Fabric 编辑 → 导出 PNG
 7. **简单优化**：选择单图 → 比例 / 完整显示或铺满裁切 / 背景填充 / 尺寸 / 格式 / 质量 → 下载
-8. 当前商品、任务选项、最近 Hero/Optimize 结果与拼图编辑状态会在刷新后恢复
+8. 当前商品、任务选项、分析与 Hero 运行状态、最近 Hero/Optimize 结果与拼图编辑状态会在刷新后恢复；商品与素材均支持带确认的删除
 
 ## 项目结构
 
@@ -67,10 +67,13 @@ templates/
     workspace.json
     draft.json
     intelligence.json
+    intelligence-run.json
     assets/     # 当前商品的上传原图、缩略图和元数据
     tasks/      # 当前商品的任务记录
     outputs/    # 当前商品的 Hero / Optimize 输出
 ```
+
+AI Key 仅保存在服务端：工作台本机覆盖写入已忽略的 `.runtime/settings/ai.json`，未设置覆盖时回退到 `DASHSCOPE_API_KEY` 环境变量；浏览器端只接收掩码与来源。
 
 活动 API 均以商品工作区为作用域：`/api/workspaces`、
 `/api/workspaces/:workspaceId/draft`、`/api/workspaces/:workspaceId/assets` 与

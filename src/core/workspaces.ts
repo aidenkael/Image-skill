@@ -2,8 +2,8 @@ import { z } from 'zod';
 import {
   TASK_KINDS,
   HeroRatioSchema,
-  HeroPersonSchema,
-  HeroSceneModeSchema,
+  HeroCreativeModeSchema,
+  HeroHumanPresenceSchema,
   CollageTaskOptionsSchema,
   OptimizeTaskOptionsSchema,
 } from './tasks';
@@ -26,10 +26,10 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 export const WorkspaceHeroDraftOptionsSchema = z.object({
   sourceAssetId: z.string(),
   ratio: HeroRatioSchema,
-  person: HeroPersonSchema,
-  sceneMode: HeroSceneModeSchema,
-  directionId: z.string().max(40).optional(),
-  scenePrompt: z.string().max(500).optional(),
+  creativeMode: HeroCreativeModeSchema.default('free'),
+  conceptId: z.string().max(40).optional(),
+  creativeIntent: z.string().trim().max(500).default(''),
+  humanPresence: HeroHumanPresenceSchema.default('auto'),
 });
 
 export const WorkspaceOptimizeDraftOptionsSchema = OptimizeTaskOptionsSchema.extend({
@@ -43,8 +43,9 @@ export const WorkspaceDraftSchema = z.object({
   heroOptions: WorkspaceHeroDraftOptionsSchema.default({
     sourceAssetId: '',
     ratio: '1:1',
-    person: 'auto',
-    sceneMode: 'auto',
+    creativeMode: 'free',
+    creativeIntent: '',
+    humanPresence: 'auto',
   }),
   heroCount: z.number().int().min(1).max(4).default(1),
 

@@ -14,19 +14,34 @@ export const EXECUTABLE_TASK_KINDS: readonly TaskKind[] = ['hero', 'collage', 'o
 export const HeroRatioSchema = z.enum(['1:1', '3:4', '4:3']);
 export type HeroRatio = z.infer<typeof HeroRatioSchema>;
 
-export const HeroPersonSchema = z.enum(['auto', 'none', 'hand', 'person']);
-export type HeroPerson = z.infer<typeof HeroPersonSchema>;
+export const HeroCreativeModeSchema = z.enum(['free', 'concept', 'custom']);
+export type HeroCreativeMode = z.infer<typeof HeroCreativeModeSchema>;
 
-export const HeroSceneModeSchema = z.enum(['auto', 'prompt']);
-export type HeroSceneMode = z.infer<typeof HeroSceneModeSchema>;
+export const HeroHumanPresenceSchema = z.enum(['auto', 'none', 'involved']);
+export type HeroHumanPresence = z.infer<typeof HeroHumanPresenceSchema>;
 
 export const HeroTaskOptionsSchema = z.object({
   sourceAssetId: z.string().min(1),
   ratio: HeroRatioSchema,
-  person: HeroPersonSchema,
-  sceneMode: HeroSceneModeSchema,
-  directionId: z.string().max(40).optional(),
-  scenePrompt: z.string().max(500).optional(),
+  creativeMode: HeroCreativeModeSchema.default('free'),
+  conceptId: z.string().max(40).optional(),
+  creativeIntent: z.string().trim().max(500).optional(),
+  humanPresence: HeroHumanPresenceSchema.default('auto'),
+}).superRefine((value, ctx) => {
+  if (value.creativeMode === 'concept' && !value.conceptId) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['conceptId'],
+      message: '请选择一个商品专属创意方向',
+    });
+  }
+  if (value.creativeMode === 'custom' && !value.creativeIntent?.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['creativeIntent'],
+      message: '请填写你的创作想法',
+    });
+  }
 });
 export type HeroTaskOptions = z.infer<typeof HeroTaskOptionsSchema>;
 

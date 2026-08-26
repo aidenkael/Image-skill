@@ -1,17 +1,32 @@
 'use client';
 
-export function AIStatusBadge({ aiConfigured }: { aiConfigured: boolean | null }) {
-  if (aiConfigured === null) return <span className="ai-status">AI 状态读取中</span>;
+import { useState } from 'react';
+import type { AISettingsStatus } from '@/core/system';
+import { AISettingsDialog } from './AISettingsDialog';
+
+export function AIStatusBadge({
+  status,
+  onStatusChange,
+}: {
+  status: AISettingsStatus | null;
+  onStatusChange(status: AISettingsStatus): void;
+}) {
+  const [open, setOpen] = useState(false);
   return (
-    <span
-      className={`ai-status ${aiConfigured ? 'is-ready' : 'is-missing'}`}
-      title={
-        aiConfigured
-          ? 'AI 能力已配置'
-          : '在项目 .env 中配置 DASHSCOPE_API_KEY 后重新启动工作台。'
-      }
-    >
-      {aiConfigured ? 'AI 已配置' : 'AI 未配置'}
-    </span>
+    <>
+      <button
+        type="button"
+        className={`ai-status ${status?.configured ? 'is-ready' : 'is-missing'}`}
+        onClick={() => setOpen(true)}
+      >
+        {status === null ? 'AI 状态读取中' : status.configured ? 'AI 已配置' : 'AI 未配置'}
+      </button>
+      <AISettingsDialog
+        open={open}
+        status={status}
+        onClose={() => setOpen(false)}
+        onStatusChange={onStatusChange}
+      />
+    </>
   );
 }

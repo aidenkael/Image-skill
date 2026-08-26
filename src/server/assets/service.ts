@@ -124,23 +124,60 @@ export async function setAssetRole(
   workspaceId: string,
   id: string,
   role: AssetRole,
-): Promise<AssetRef | null> {
+): Promise<AssetRef[] | null> {
   assertSafeId(id);
   const asset = await getAsset(workspaceId, id);
   if (!asset) return null;
+  if (role === 'primary') {
+    const current = await listAssets(workspaceId);
+    for (const item of current) {
+      if (item.id === id || item.role !== 'primary') continue;
+      await writeJson(
+        workspaceRuntimePath(workspaceId, 'assets', item.id, 'asset.json'),
+        { ...item, role: 'unknown' },
+      );
+    }
+  }
   const next: AssetRef = { ...asset, role };
   await writeJson(workspaceRuntimePath(workspaceId, 'assets', id, 'asset.json'), next);
-  return next;
+  await ensurePrimaryAsset(workspaceId);
+  return listAssets(workspaceId);
 }
 
 /** 约定：第一个上传的资源自动设为 primary（资源角色可被用户修正） */
 export async function ensurePrimaryAsset(workspaceId: string): Promise<void> {
   const all = await listAssets(workspaceId);
   if (all.length === 0) return;
-  const hasPrimary = all.some((a) => a.role === 'primary');
-  if (!hasPrimary) {
-    await setAssetRole(workspaceId, all[all.length - 1].id, 'primary');
+  const primaryAssets = all.filter((asset) => asset.role === 'primary');
+  if (primaryAssets.length === 0) {
+    const first = all[all.length - 1];
+    await writeJson(
+      workspaceRuntimePath(workspaceId, 'assets', first.id, 'asset.json'),
+      { ...first, role: 'primary' },
+    );
+    return;
   }
+  if (primaryAssets.length > 1) {
+    const keep = primaryAssets[primaryAssets.length - 1];
+    for (const asset of primaryAssets) {
+      if (asset.id === keep.id) continue;
+      await writeJson(
+        workspaceRuntimePath(workspaceId, 'assets', asset.id, 'asset.json'),
+        { ...asset, role: 'unknown' },
+      );
+    }
+  }
+}
+
+export async function deleteAsset(workspaceId: string, id: string): Promise<AssetRef[] | null> {
+  assertSafeId(id);
+  if (!(await getAsset(workspaceId, id))) return null;
+  await fs.rm(workspaceRuntimePath(workspaceId, 'assets', id), {
+    recursive: true,
+    force: false,
+  });
+  await ensurePrimaryAsset(workspaceId);
+  return listAssets(workspaceId);
 }
 
 export interface AssetFileResult {

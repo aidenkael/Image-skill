@@ -6,6 +6,7 @@ import { TaskResult, taskOutputUrl } from '@/core/results';
 import { assetFile, listAssets } from '@/server/assets/service';
 import { getWorkspaceIntelligence } from '@/server/intelligence/service';
 import { AliyunQwenImageProvider } from '@/server/providers/aliyun-qwen-image';
+import { providerFetchError, providerHttpError } from '@/server/providers/provider-errors';
 import { ensureDir } from '@/server/storage/fs-store';
 import { readImageMeta } from '@/server/image/sharp';
 
@@ -15,9 +16,14 @@ import { readImageMeta } from '@/server/image/sharp';
  */
 
 const PRODUCT_FIDELITY_INSTRUCTION =
-  'Keep the referenced product unchanged in shape, color, material, pattern, ' +
-  'logo/text, structure, count and accessories. Change only scene, lighting, ' +
-  'composition and human interaction when requested.';
+  'Preserve the referenced product exactly: keep its identity, shape, proportions, ' +
+  'color, visible material appearance, pattern, logo/text, structure, count and accessories unchanged.';
+
+const FREE_CREATIVE_INSTRUCTION =
+  'Create a high-quality ecommerce atmosphere hero image centered on the referenced product. ' +
+  'Freely decide the creative concept, environment, framing, camera perspective, lighting, styling, ' +
+  'spatial treatment and whether or how human presence is useful. Make the visual treatment fit this ' +
+  'specific product rather than a generic template.';
 
 /** ratio → V1 固定输出尺寸（单一映射函数，UI 不暴露原始 size） */
 export function heroSizeForRatio(ratio: string): string {
@@ -31,41 +37,44 @@ export function heroSizeForRatio(ratio: string): string {
   }
 }
 
-const PERSON_INSTRUCTIONS: Record<string, string> = {
-  none: 'Do not include any person in the scene.',
-  hand: 'A real human hand naturally holds or interacts with the product.',
-  person: 'A complete real person naturally uses or wears the product, fully visible.',
-};
-
-type HeroDirection = ProductIntelligenceRecord['plan']['heroDirections'][number];
+type HeroConcept = ProductIntelligenceRecord['plan']['heroConcepts'][number];
 
 export function buildHeroPrompt(
   request: CreateTaskRequest,
-  direction?: HeroDirection,
+  concept?: HeroConcept,
 ): string {
   const opts = request.options as HeroTaskOptions;
   const parts: string[] = [PRODUCT_FIDELITY_INSTRUCTION];
-  if (opts.sceneMode === 'prompt' && opts.scenePrompt?.trim()) {
-    parts.push(`Scene: ${opts.scenePrompt.trim()}`);
+  if (opts.creativeMode === 'free') {
+    parts.push(FREE_CREATIVE_INSTRUCTION);
+  } else if (opts.creativeMode === 'concept') {
+    if (!concept) throw new Error('商品专属创意方向不存在，请重新分析商品');
+    parts.push(concept.prompt);
   } else {
-    if (!direction) throw new Error('AI 推荐方向不存在，请重新分析商品');
     parts.push(
-      `Direction: ${direction.prompt}`,
-      `Composition: ${direction.composition}`,
-      `Lighting: ${direction.lighting}`,
+      `Interpret and expand the following user intent creatively into an effective commercial hero image ` +
+        `while preserving the product exactly: ${opts.creativeIntent?.trim()}`,
     );
   }
-  const resolvedPerson = opts.person === 'auto' ? direction?.person : opts.person;
-  if (resolvedPerson) {
-    const person = PERSON_INSTRUCTIONS[resolvedPerson];
-    if (person) parts.push(person);
+  if (opts.humanPresence === 'none') {
+    parts.push('Do not show any person, hand, body part, silhouette or human figure anywhere in the image.');
+  } else if (opts.humanPresence === 'involved') {
+    parts.push(
+      'Include meaningful, natural human presence that participates in the scene. Choose the most appropriate ' +
+        'person, hand or body framing and product interaction for this product and concept.',
+    );
   }
   return parts.join(' ');
 }
 
 async function downloadImage(url: string): Promise<Buffer> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
-  if (!res.ok) throw new Error(`下载生成图片失败 HTTP ${res.status}`);
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+  } catch (error) {
+    throw providerFetchError(error);
+  }
+  if (!res.ok) throw providerHttpError(res.status);
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length === 0) throw new Error('下载的生成图片为空');
   return buf;
@@ -80,26 +89,22 @@ export async function runHeroTask(
   const source = await assetFile(workspaceId, opts.sourceAssetId, 'original');
   if (!source) throw new Error('源商品图片不存在或已被删除');
 
-  let direction: HeroDirection | undefined;
-  if (opts.sceneMode === 'auto') {
+  let concept: HeroConcept | undefined;
+  if (opts.creativeMode === 'concept') {
     const intelligence = await getWorkspaceIntelligence(workspaceId);
-    if (!intelligence) throw new Error('请先分析商品获取 AI 推荐方向');
+    if (!intelligence) throw new Error('请先分析商品获取专属创意方向');
     const assets = await listAssets(workspaceId);
     if (!isIntelligenceFresh(intelligence, assets)) {
-      throw new Error('商品素材已变化，请重新分析后再使用 AI 推荐方向');
+      throw new Error('商品素材已变化，请重新分析后再使用商品专属方向');
     }
-    direction = opts.directionId
-      ? intelligence.plan.heroDirections.find((item) => item.id === opts.directionId)
-      : intelligence.plan.heroDirections[0];
-    if (!direction) throw new Error('所选 AI 推荐方向不存在，请重新选择');
-  } else if (!opts.scenePrompt?.trim()) {
-    throw new Error('请填写自定义场景方向');
+    concept = intelligence.plan.heroConcepts.find((item) => item.id === opts.conceptId);
+    if (!concept) throw new Error('所选商品专属创意方向不存在，请重新选择');
   }
 
   const provider = new AliyunQwenImageProvider();
   const generated = await provider.generate({
     imagePath: source.filePath,
-    prompt: buildHeroPrompt(request, direction),
+    prompt: buildHeroPrompt(request, concept),
     size: heroSizeForRatio(opts.ratio),
     count: request.count,
   });

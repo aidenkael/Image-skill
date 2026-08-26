@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import {
   createTask,
   listTasks,
+  TaskConflictError,
   TaskValidationError,
 } from '@/server/tasks/service';
 import {
@@ -20,6 +21,9 @@ export async function POST(request: Request, { params }: Context) {
     const task = await createTask(workspaceId, await request.json());
     return NextResponse.json({ task }, { status: 201 });
   } catch (err) {
+    if (err instanceof TaskConflictError) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
     if (
       err instanceof WorkspaceValidationError ||
       err instanceof TaskValidationError ||

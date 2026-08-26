@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { AssetRef, AssetRole } from '@/core/assets';
 import { ASSET_ROLES } from '@/core/assets';
 import { assetUrl } from '@/core/results';
@@ -13,10 +13,13 @@ interface AssetPanelProps {
   workspaceId: string;
   assets: AssetRef[];
   selectedIds: string[];
-  busy: boolean;
+  uploading: boolean;
+  lockedIds: Set<string>;
+  mutatingIds: Set<string>;
   onUpload(files: File[]): void;
   onToggle(id: string): void;
   onSetRole(id: string, role: AssetRole): void;
+  onRemove(id: string): void;
 }
 
 const ROLE_LABELS: Record<AssetRole, string> = {
@@ -35,12 +38,16 @@ export function AssetPanel({
   workspaceId,
   assets,
   selectedIds,
-  busy,
+  uploading,
+  lockedIds,
+  mutatingIds,
   onUpload,
   onToggle,
   onSetRole,
+  onRemove,
 }: AssetPanelProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const handleFiles = useCallback(
     (fileList: FileList | null) => {
@@ -67,16 +74,16 @@ export function AssetPanel({
           handleFiles(e.dataTransfer.files);
         }}
         onClick={() => {
-          if (!busy) inputRef.current?.click();
+          if (!uploading) inputRef.current?.click();
         }}
       >
-        {busy ? '上传中…' : '拖拽图片到此处，或点击选择（JPEG/PNG/WebP）'}
+        {uploading ? '上传中…' : '拖拽图片到此处，或点击选择（JPEG/PNG/WebP）'}
         <input
           ref={inputRef}
           type="file"
           accept="image/jpeg,image/png,image/webp"
           multiple
-          disabled={busy}
+          disabled={uploading}
           hidden
           onChange={(e) => {
             handleFiles(e.target.files);
@@ -89,6 +96,8 @@ export function AssetPanel({
         {assets.length === 0 && <div className="empty-hint">暂无图片，请先上传商品图</div>}
         {assets.map((asset) => {
           const selected = selectedIds.includes(asset.id);
+          const locked = lockedIds.has(asset.id);
+          const mutating = mutatingIds.has(asset.id);
           return (
             <div
               key={asset.id}
@@ -111,6 +120,7 @@ export function AssetPanel({
               <select
                 className="asset-role"
                 value={asset.role}
+                disabled={locked || mutating}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => onSetRole(asset.id, e.target.value as AssetRole)}
               >
@@ -120,6 +130,18 @@ export function AssetPanel({
                   </option>
                 ))}
               </select>
+              <div className="asset-actions" onClick={(event) => event.stopPropagation()}>
+                {locked ? (
+                  <span className="asset-lock">AI 正在使用此图片</span>
+                ) : confirmingId === asset.id ? (
+                  <>
+                    <button type="button" className="asset-remove-confirm" disabled={mutating} onClick={() => { onRemove(asset.id); setConfirmingId(null); }}>确认移除</button>
+                    <button type="button" className="asset-remove-cancel" onClick={() => setConfirmingId(null)}>取消</button>
+                  </>
+                ) : (
+                  <button type="button" className="asset-remove" disabled={mutating} onClick={() => setConfirmingId(asset.id)}>移除</button>
+                )}
+              </div>
               {selected && <div className="asset-check">✓</div>}
             </div>
           );

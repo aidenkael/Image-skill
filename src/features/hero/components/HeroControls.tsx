@@ -12,12 +12,11 @@ interface HeroControlsProps {
   intelligence: ProductIntelligenceRecord | null;
   count: number;
   busy: boolean;
+  aiConfigured: boolean;
   onChange(patch: Partial<HeroTaskOptions>): void;
   onCountChange(n: number): void;
   onGenerate(): void;
 }
-
-const PERSON_LABELS = { none: '无人物', hand: '手部展示', person: '完整人物' } as const;
 
 export function HeroControls({
   workspaceId,
@@ -26,71 +25,121 @@ export function HeroControls({
   intelligence,
   count,
   busy,
+  aiConfigured,
   onChange,
   onCountChange,
   onGenerate,
 }: HeroControlsProps) {
   const sourceAsset = assets.find((asset) => asset.id === options.sourceAssetId);
-  const directions = intelligence?.plan.heroDirections ?? [];
-  const autoReady = directions.length > 0;
-  const canGenerate =
-    Boolean(sourceAsset) &&
-    (options.sceneMode === 'auto' ? autoReady : Boolean(options.scenePrompt?.trim()));
+  const concepts = intelligence?.plan.heroConcepts ?? [];
+  const selectedConcept = concepts.find((concept) => concept.id === options.conceptId);
+  const blocker = busy
+    ? '当前商品的氛围主图正在生成，请等待完成。'
+    : !sourceAsset
+      ? '请明确选择一张非参考源商品图。'
+      : options.creativeMode === 'concept' && !selectedConcept
+        ? '请选择一个当前商品的专属创意方向。'
+        : options.creativeMode === 'custom' && !options.creativeIntent?.trim()
+          ? '请填写你的创作想法。'
+          : !aiConfigured
+            ? 'AI 尚未配置，请先在右上角打开 AI 设置。'
+            : null;
 
   return (
     <div className="controls-body">
       <div className="field">
         <label className="field-label" htmlFor="hero-source-asset">源商品图（仅 1 张）</label>
-        <select id="hero-source-asset" className="input" value={options.sourceAssetId} onChange={(event) => onChange({ sourceAssetId: event.target.value })}>
+        <select
+          id="hero-source-asset"
+          className="input"
+          value={options.sourceAssetId}
+          onChange={(event) => onChange({ sourceAssetId: event.target.value })}
+        >
           <option value="">请选择源商品图</option>
-          {assets.filter((asset) => asset.role !== 'reference').map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+          {assets.filter((asset) => asset.role !== 'reference').map((asset) => (
+            <option key={asset.id} value={asset.id}>{asset.name}</option>
+          ))}
         </select>
-        {sourceAsset ? <div className="hero-source-preview"><img src={assetUrl(workspaceId, sourceAsset.id, 'thumb')} alt={sourceAsset.name} /><span>{sourceAsset.name}</span></div> : null}
+        {sourceAsset ? (
+          <div className="hero-source-preview">
+            <img src={assetUrl(workspaceId, sourceAsset.id, 'thumb')} alt={sourceAsset.name} />
+            <span>{sourceAsset.name}</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="field">
-        <label className="field-label">视觉方向</label>
-        {directions.map((direction) => (
-          <button
-            key={direction.id}
-            type="button"
-            className={`direction-card${options.sceneMode === 'auto' && options.directionId === direction.id ? ' is-active' : ''}`}
-            onClick={() => onChange({
-              sceneMode: 'auto',
-              directionId: direction.id,
-              sourceAssetId: direction.sourceAssetId,
-            })}
-          >
-            <strong>{direction.title}</strong>
-            <span>{direction.scene}</span>
-            <span>{direction.composition}</span>
-            <small>人物建议：{PERSON_LABELS[direction.person]}</small>
-          </button>
-        ))}
-        {!autoReady ? <div className="hint">先分析商品获取推荐方向，或切换到自定义方向</div> : null}
-        <button type="button" className={`direction-card custom-direction${options.sceneMode === 'prompt' ? ' is-active' : ''}`} onClick={() => onChange({ sceneMode: 'prompt', directionId: undefined })}>
-          <strong>自定义方向</strong>
-          <span>由你明确描述想要的场景与氛围</span>
-        </button>
-        {options.sceneMode === 'prompt' ? <textarea className="input textarea" placeholder="例如：阳光充足的北欧风客厅，木地板，产品放在茶几上" value={options.scenePrompt ?? ''} maxLength={500} onChange={(event) => onChange({ scenePrompt: event.target.value })} /> : null}
+        <label className="field-label">创作方式</label>
+        <div className="seg">
+          <button type="button" className={`seg-btn${options.creativeMode === 'free' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'free', conceptId: undefined })}>AI 自由创作</button>
+          <button type="button" className={`seg-btn${options.creativeMode === 'concept' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'concept' })}>商品专属方向</button>
+          <button type="button" className={`seg-btn${options.creativeMode === 'custom' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'custom', conceptId: undefined })}>自定义想法</button>
+        </div>
+        {options.creativeMode === 'free' ? (
+          <div className="hint">AI 根据商品自行决定画面、镜头、环境与表现方式。</div>
+        ) : null}
+        {options.creativeMode === 'concept' ? (
+          <div className="concept-list">
+            {concepts.map((concept) => (
+              <button
+                key={concept.id}
+                type="button"
+                className={`direction-card${options.conceptId === concept.id ? ' is-active' : ''}`}
+                onClick={() => onChange({
+                  creativeMode: 'concept',
+                  conceptId: concept.id,
+                  ...(options.sourceAssetId ? {} : {
+                    sourceAssetId: concept.recommendedSourceAssetId,
+                  }),
+                })}
+              >
+                <strong>{concept.title}</strong>
+                <span>{concept.creativeBrief}</span>
+                <small>{concept.reason}</small>
+              </button>
+            ))}
+            {concepts.length === 0 ? (
+              <div className="hint">先分析商品获取专属创意方向；也可直接使用 AI 自由创作。</div>
+            ) : null}
+          </div>
+        ) : null}
+        {options.creativeMode === 'custom' ? (
+          <textarea
+            className="input textarea"
+            placeholder="写下你希望画面传达的感觉、故事或任何创意要求"
+            value={options.creativeIntent ?? ''}
+            maxLength={500}
+            onChange={(event) => onChange({ creativeIntent: event.target.value })}
+          />
+        ) : null}
+      </div>
+
+      <div className="field">
+        <label className="field-label">人物参与（可选）</label>
+        <div className="seg">
+          {([
+            ['auto', 'AI 决定'],
+            ['none', '不要人物'],
+            ['involved', '需要人物参与'],
+          ] as const).map(([value, label]) => (
+            <button key={value} type="button" className={`seg-btn${options.humanPresence === value ? ' is-active' : ''}`} onClick={() => onChange({ humanPresence: value })}>{label}</button>
+          ))}
+        </div>
+        <div className="hint">
+          {options.humanPresence === 'involved'
+            ? '需要人物参与：要求画面有人物参与；具体呈现方式由 AI 决定。'
+            : options.humanPresence === 'none'
+              ? '不要人物：要求画面不出现人物、手部或人体局部。'
+              : 'AI 决定：不限制是否出现人物，由 AI 根据商品与创意判断。'}
+        </div>
       </div>
 
       <Choice label="输出数量" current={String(count)} values={['1', '2', '3', '4']} onSelect={(value) => onCountChange(Number(value))} />
       <Choice label="画面比例" current={options.ratio} values={['1:1', '3:4', '4:3']} labels={['1:1 方形', '3:4 竖版', '4:3 横版']} onSelect={(value) => onChange({ ratio: value as HeroTaskOptions['ratio'] })} />
 
-      <div className="field">
-        <label className="field-label">人物</label>
-        <select className="input" value={options.person} onChange={(event) => onChange({ person: event.target.value as HeroTaskOptions['person'] })}>
-          <option value="auto">跟随推荐</option>
-          <option value="none">无人物</option>
-          <option value="hand">手部展示</option>
-          <option value="person">完整人物</option>
-        </select>
-      </div>
-
       <div className="controls-actions">
-        <button type="button" className="btn btn-primary" disabled={busy || !canGenerate} onClick={onGenerate}>{busy ? '生成中…' : '生成氛围主图'}</button>
-        {!sourceAsset ? <div className="hint">请明确选择一张非参考源商品图</div> : null}
+        <button type="button" className="btn btn-primary" disabled={Boolean(blocker)} onClick={onGenerate}>{busy ? '生成中…' : '生成氛围主图'}</button>
+        {blocker ? <div className="hint blocker-hint">{blocker}</div> : null}
       </div>
     </div>
   );

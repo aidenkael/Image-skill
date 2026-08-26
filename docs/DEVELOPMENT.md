@@ -30,10 +30,10 @@ SHEIN 类电商商品视觉工作台：卖家上传真实商品图，选择任�
 - 活动商品 ID 保存在 `localStorage` 的 `image-skill.active-workspace`；素材、任务、草稿和输出按 Workspace 隔离。
 - 任务切换保留各自状态；detail 仅作为后续提示，不得静默调用其他任务。
 - 商品分析只由用户显式触发，不在上传、刷新或 Workspace 切换时自动调用。
-- Hero 自动模式只消费新鲜的 Visual Plan；Collage 只消费文案建议，服务端执行始终确定性。
-- UI 不暴露 prompt、模型 id、Provider 内部或 Agent 概念。
+- Hero 默认自由创作且不依赖商品分析；商品专属方向只消费新鲜的 Visual Plan；自定义想法同样不依赖分析。Collage 只消费文案建议，服务端执行始终确定性。
+- UI 不暴露 raw prompt 或 Agent 概念；AI 设置仅展示 Provider、固定模型 id、掩码 Key 与来源。
 - 上传支持拖拽；资源角色可修正；商品草稿以 400ms 防抖持久化；刷新后恢复最近一次 hero/optimize 任务结果与拼图编辑状态；
-  hero 每张结果提供同源下载；生成数量不完整（少于请求数）即整体失败，不以部分结果冒充成功。
+  hero 每张结果提供同源下载；生成数量不完整（少于请求数）即整体失败，不以部分结果冒充成功；分析与 Hero 的运行状态按 Workspace 落盘，切换/刷新后继续轮询，活动付费操作锁定其使用的素材。
 
 ## 4. 模块边界（强制）
 
@@ -68,6 +68,7 @@ templates/
     workspace.json
     draft.json
     intelligence.json
+    intelligence-run.json
     assets/<assetId>/
     tasks/<taskId>.json
     outputs/<taskId>/
@@ -104,7 +105,7 @@ templates/
   `ImageProvider.generate(...)` 使用 qwen-image-3.0-pro，Hero 请求参数固定 `prompt_extend: true`。
 - Collage 服务端不调用 AI；Optimize 仅调用 Sharp。
 - hero 结果数量必须等于请求数量，否则任务整体失败。
-- 未配置 `DASHSCOPE_API_KEY` 时返回明确配置错误，不伪造成功结果。
+- AI Key 优先读取 `.runtime/settings/ai.json` 的本机覆盖，其次读取 `DASHSCOPE_API_KEY`；未配置时返回明确错误，不伪造成功结果，完整 Key 不进入浏览器存储或响应。
 
 ## 8. V1 开发顺序
 

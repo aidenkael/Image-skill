@@ -7,25 +7,30 @@ interface WorkspaceSwitcherProps {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   creating: boolean;
+  deleting: boolean;
   createOpen: boolean;
   error: string | null;
   onCreateOpenChange(open: boolean): void;
   onCreate(name: string): Promise<Workspace | null>;
   onSelect(workspaceId: string): void;
+  onDelete(): Promise<boolean>;
 }
 
 export function WorkspaceSwitcher({
   workspaces,
   activeWorkspaceId,
   creating,
+  deleting,
   createOpen,
   error,
   onCreateOpenChange,
   onCreate,
   onSelect,
+  onDelete,
 }: WorkspaceSwitcherProps) {
   const [name, setName] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [deleteConfirming, setDeleteConfirming] = useState(false);
 
   useEffect(() => {
     if (createOpen) inputRef.current?.focus();
@@ -65,6 +70,24 @@ export function WorkspaceSwitcher({
       >
         新建商品
       </button>
+      {activeWorkspaceId ? (
+        deleteConfirming ? (
+          <div className="workspace-delete-confirm">
+            <span>商品素材、分析、任务和生成结果都会删除，且无法恢复。</span>
+            <button
+              type="button"
+              className="workspace-danger-button"
+              disabled={deleting}
+              onClick={() => void onDelete().then((deleted) => deleted && setDeleteConfirming(false))}
+            >
+              {deleting ? '删除中…' : '确认删除'}
+            </button>
+            <button type="button" className="workspace-confirm-button" onClick={() => setDeleteConfirming(false)}>取消</button>
+          </div>
+        ) : (
+          <button type="button" className="workspace-delete-button" onClick={() => setDeleteConfirming(true)}>删除当前商品</button>
+        )
+      ) : null}
       {createOpen ? (
         <form className="workspace-create-form" onSubmit={(event) => void submit(event)}>
           <input

@@ -23,15 +23,18 @@ export async function POST(request: Request, { params }: Context) {
     if (files.length === 0) {
       return NextResponse.json({ error: '未收到上传文件（字段名 files）' }, { status: 400 });
     }
-    const assets = [];
+    const createdIds: string[] = [];
     for (const file of files) {
       const buffer = Buffer.from(await file.arrayBuffer());
-      assets.push(
-        await saveAsset(workspaceId, { buffer, name: file.name, mimeType: file.type }),
-      );
+      const created = await saveAsset(workspaceId, {
+        buffer,
+        name: file.name,
+        mimeType: file.type,
+      });
+      createdIds.push(created.id);
     }
     await ensurePrimaryAsset(workspaceId);
-    return NextResponse.json({ assets }, { status: 201 });
+    return NextResponse.json({ assets: await listAssets(workspaceId), createdIds }, { status: 201 });
   } catch (err) {
     if (err instanceof WorkspaceValidationError || err instanceof AssetValidationError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
@@ -47,6 +50,7 @@ export async function GET(_request: Request, { params }: Context) {
     if (!(await getWorkspace(workspaceId))) {
       return NextResponse.json({ error: '商品不存在' }, { status: 404 });
     }
+    await ensurePrimaryAsset(workspaceId);
     return NextResponse.json({ assets: await listAssets(workspaceId) });
   } catch (err) {
     if (err instanceof WorkspaceValidationError || err instanceof AssetValidationError) {

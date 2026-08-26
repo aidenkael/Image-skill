@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Workspace } from '@/core/workspaces';
-import { createWorkspace as createWorkspaceRequest, listWorkspaces } from './api';
+import {
+  createWorkspace as createWorkspaceRequest,
+  deleteWorkspace as deleteWorkspaceRequest,
+  listWorkspaces,
+} from './api';
 
 const ACTIVE_WORKSPACE_KEY = 'image-skill.active-workspace';
 
@@ -12,9 +16,11 @@ export interface WorkspacesModel {
   activeWorkspace: Workspace | null;
   loading: boolean;
   creating: boolean;
+  deleting: boolean;
   error: string | null;
   createWorkspace(name: string): Promise<Workspace | null>;
   selectWorkspace(workspaceId: string): void;
+  deleteCurrentWorkspace(): Promise<boolean>;
 }
 
 export function useWorkspaces(): WorkspacesModel {
@@ -22,6 +28,7 @@ export function useWorkspaces(): WorkspacesModel {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -85,14 +92,39 @@ export function useWorkspaces(): WorkspacesModel {
     [activeWorkspaceId, workspaces],
   );
 
+  const deleteCurrentWorkspace = useCallback(async (): Promise<boolean> => {
+    if (!activeWorkspaceId) return false;
+    const deletingId = activeWorkspaceId;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteWorkspaceRequest(deletingId);
+      const currentIndex = workspaces.findIndex((item) => item.id === deletingId);
+      const remaining = workspaces.filter((item) => item.id !== deletingId);
+      const next = remaining[Math.min(Math.max(currentIndex, 0), remaining.length - 1)] ?? null;
+      setWorkspaces(remaining);
+      setActiveWorkspaceId(next?.id ?? null);
+      if (next) window.localStorage.setItem(ACTIVE_WORKSPACE_KEY, next.id);
+      else window.localStorage.removeItem(ACTIVE_WORKSPACE_KEY);
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return false;
+    } finally {
+      setDeleting(false);
+    }
+  }, [activeWorkspaceId, workspaces]);
+
   return {
     workspaces,
     activeWorkspaceId,
     activeWorkspace,
     loading,
     creating,
+    deleting,
     error,
     createWorkspace,
     selectWorkspace,
+    deleteCurrentWorkspace,
   };
 }

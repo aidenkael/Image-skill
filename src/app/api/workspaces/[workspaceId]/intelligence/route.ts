@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import {
   analyzeWorkspace,
   getWorkspaceIntelligence,
+  getWorkspaceIntelligenceRun,
+  IntelligenceConflictError,
   IntelligenceValidationError,
 } from '@/server/intelligence/service';
 import { ProviderConfigError, ProviderRequestError } from '@/server/providers/provider-errors';
@@ -17,6 +19,7 @@ export async function GET(_request: Request, { params }: Context) {
     }
     return NextResponse.json({
       intelligence: await getWorkspaceIntelligence(workspaceId),
+      run: await getWorkspaceIntelligenceRun(workspaceId),
     });
   } catch (error) {
     if (
@@ -37,10 +40,11 @@ export async function POST(request: Request, { params }: Context) {
       return NextResponse.json({ error: '商品不存在' }, { status: 404 });
     }
     const body = (await request.json()) as { assetIds?: unknown };
-    return NextResponse.json({
-      intelligence: await analyzeWorkspace(workspaceId, body.assetIds),
-    });
+    return NextResponse.json(await analyzeWorkspace(workspaceId, body.assetIds));
   } catch (error) {
+    if (error instanceof IntelligenceConflictError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
     if (error instanceof ProviderConfigError) {
       return NextResponse.json({ error: error.message }, { status: 503 });
     }

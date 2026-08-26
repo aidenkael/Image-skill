@@ -61,12 +61,19 @@ export function CanvasArea({
         )
       : [];
   const title = kind === 'hero' ? '氛围主图结果' : '优化结果';
+  const statusLabel = latestTask?.status === 'running'
+    ? '生成中'
+    : latestTask?.status === 'succeeded'
+      ? '已完成'
+      : latestTask?.status === 'failed'
+        ? '失败'
+        : null;
 
   return (
     <section className="canvas-area">
       <div className="canvas-title">
         {title}
-        {latestTask ? <span className={`task-status status-${latestTask.status}`}>{latestTask.status}</span> : null}
+        {statusLabel ? <span className={`task-status status-${latestTask?.status}`}>{statusLabel}</span> : null}
       </div>
       {images.length > 0 ? (
         <div className="result-grid">
@@ -82,7 +89,7 @@ export function CanvasArea({
           {latestTask?.status === 'failed'
             ? '处理失败，请查看右侧错误提示'
             : latestTask?.status === 'running'
-              ? '处理中…'
+              ? kind === 'hero' ? '生成中… 可切换到其他任务，返回后会继续显示进度。' : '处理中…'
               : kind === 'hero'
                 ? '选择商品图片与视觉方向后，生成氛围主图'
                 : '选择一张商品图并设置输出规格后，优化图片'}

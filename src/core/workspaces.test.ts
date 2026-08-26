@@ -23,8 +23,33 @@ describe('商品工作区契约', () => {
   it('WorkspaceDraftSchema 生成并校验完整默认草稿', () => {
     expect(WorkspaceDraftSchema.parse({})).toEqual(DEFAULT_WORKSPACE_DRAFT);
     expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.sourceAssetId).toBe('');
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).toMatchObject({
+      creativeMode: 'free',
+      creativeIntent: '',
+      humanPresence: 'auto',
+    });
     expect(DEFAULT_WORKSPACE_DRAFT.collageVariants).toEqual([]);
     expect(DEFAULT_WORKSPACE_DRAFT.latestHeroTaskId).toBeNull();
+  });
+
+  it('旧 Hero 草稿字段被丢弃并补入新默认值', () => {
+    const draft = WorkspaceDraftSchema.parse({
+      heroOptions: {
+        sourceAssetId: '',
+        ratio: '1:1',
+        person: 'hand',
+        sceneMode: 'prompt',
+        directionId: 'old',
+        scenePrompt: '旧场景',
+      },
+    });
+    expect(draft.heroOptions).toEqual({
+      sourceAssetId: '',
+      ratio: '1:1',
+      creativeMode: 'free',
+      creativeIntent: '',
+      humanPresence: 'auto',
+    });
   });
 
   it('活动客户端源码不再引用全局资源或任务 API', () => {

@@ -44,6 +44,7 @@ function stubFetch(images: { url: string }[], captured: CapturedRequest) {
 
 beforeAll(async () => {
   workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'qwen-provider-test-'));
+  process.env.RUNTIME_DIR = path.join(workDir, '.runtime');
   imagePath = path.join(workDir, 'input.png');
   await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ff0000' } })
     .png()
@@ -51,6 +52,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  delete process.env.RUNTIME_DIR;
   await fs.rm(workDir, { recursive: true, force: true });
 });
 
@@ -69,7 +71,7 @@ describe('AliyunQwenImageProvider', () => {
     ).rejects.toThrowError(ProviderConfigError);
     await expect(
       provider.generate({ imagePath, prompt: 'p', size: '1024*1024', count: 1 }),
-    ).rejects.toThrow(/DASHSCOPE_API_KEY/);
+    ).rejects.toThrow(/AI 尚未配置/);
   });
 
   it('请求体使用 qwen-image-3.0-pro，且 n / size / prompt_extend 正确', async () => {

@@ -30,16 +30,13 @@ export const ProductAnalysisSchema = z.object({
   assetObservations: z.array(AssetObservationSchema).min(1).max(9),
 });
 
-export const HeroDirectionSchema = z.object({
+export const HeroCreativeConceptSchema = z.object({
   id: z.enum(['hero-1', 'hero-2', 'hero-3']),
-  title: z.string().trim().min(1).max(40),
-  sourceAssetId: z.string().uuid(),
-  scene: z.string().trim().min(1).max(140),
-  composition: z.string().trim().min(1).max(120),
-  lighting: z.string().trim().min(1).max(100),
-  person: z.enum(['none', 'hand', 'person']),
-  prompt: z.string().trim().min(1).max(700),
-  reason: z.string().trim().min(1).max(140),
+  title: z.string().trim().min(1).max(48),
+  recommendedSourceAssetId: z.string().uuid(),
+  creativeBrief: z.string().trim().min(1).max(240),
+  prompt: z.string().trim().min(1).max(900),
+  reason: z.string().trim().min(1).max(160),
 });
 
 export const CollageCopyPlanSchema = z.object({
@@ -48,7 +45,7 @@ export const CollageCopyPlanSchema = z.object({
 });
 
 export const VisualPlanSchema = z.object({
-  heroDirections: z.array(HeroDirectionSchema).min(1).max(3),
+  heroConcepts: z.array(HeroCreativeConceptSchema).min(1).max(3),
   collage: CollageCopyPlanSchema,
 });
 
@@ -62,7 +59,7 @@ export const IntelligenceAssetSnapshotSchema = z.object({
   role: z.enum(ASSET_ROLES),
 });
 
-export const PRODUCT_INTELLIGENCE_SCHEMA_VERSION = 2 as const;
+export const PRODUCT_INTELLIGENCE_SCHEMA_VERSION = 3 as const;
 
 export const ProductIntelligenceRecordSchema = ProductIntelligencePayloadSchema.extend({
   schemaVersion: z.literal(PRODUCT_INTELLIGENCE_SCHEMA_VERSION),
@@ -72,6 +69,20 @@ export const ProductIntelligenceRecordSchema = ProductIntelligencePayloadSchema.
 
 export type ProductIntelligencePayload = z.infer<typeof ProductIntelligencePayloadSchema>;
 export type ProductIntelligenceRecord = z.infer<typeof ProductIntelligenceRecordSchema>;
+
+export const IntelligenceRunStatusSchema = z.enum(['running', 'succeeded', 'failed']);
+
+export const ProductIntelligenceRunSchema = z.object({
+  id: z.string().uuid(),
+  workspaceId: z.string().uuid(),
+  assetIds: z.array(z.string().uuid()).min(1).max(9),
+  status: IntelligenceRunStatusSchema,
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  error: z.string().max(300).optional(),
+});
+
+export type ProductIntelligenceRun = z.infer<typeof ProductIntelligenceRunSchema>;
 
 export function isIntelligenceFresh(
   record: ProductIntelligenceRecord,

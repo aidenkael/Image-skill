@@ -12,6 +12,7 @@ import {
   restoreSelectedAssetIds,
   sanitizeCollageVariants,
   sourceIdAfterRoleChange,
+  OrderedDraftWriter,
 } from './workbench';
 
 /**
@@ -36,7 +37,12 @@ function heroTask(
       kind: 'hero',
       assetIds: ['asset-1'],
       count: 1,
-      options: { sourceAssetId: 'asset-1', ratio: '1:1', person: 'auto', sceneMode: 'auto' },
+      options: {
+        sourceAssetId: 'asset-1',
+        ratio: '1:1',
+        creativeMode: 'free',
+        humanPresence: 'auto',
+      },
     },
     status,
     createdAt: '2026-08-25T00:00:00.000Z',
@@ -87,7 +93,8 @@ function collageDoc(name: string, assetId: string | null): TemplateDocument {
 
 describe('Workspace 三任务草稿契约', () => {
   it('允许尚未选择源图的 Optimize 默认草稿并保留恢复字段', () => {
-    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.directionId).toBeUndefined();
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.conceptId).toBeUndefined();
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.creativeMode).toBe('free');
     expect(DEFAULT_WORKSPACE_DRAFT.optimizeOptions).toMatchObject({
       sourceAssetId: '', ratio: 'original', format: 'jpg',
     });
@@ -165,6 +172,35 @@ describe('Workspace 三任务草稿契约', () => {
     expect(next[0].layers[0]).toMatchObject({ assetId: null });
     expect(next[0].layers[1]).toEqual(staleFabricDoc.layers[1]);
     expect(next[1]).toBe(variants[1]);
+  });
+});
+
+describe('OrderedDraftWriter', () => {
+  it('切换前 flush 保存最后一版，且同 Workspace 异步写入保持顺序', async () => {
+    const completed: string[] = [];
+    let releaseFirst: () => void = () => undefined;
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const writer = new OrderedDraftWriter(async (draft) => {
+      const intent = draft.heroOptions.creativeIntent;
+      if (intent === '旧') {
+        markStarted();
+        await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      }
+      completed.push(intent);
+    }, () => undefined, 10_000);
+    writer.schedule(WorkspaceDraftSchema.parse({ heroOptions: {
+      sourceAssetId: '', ratio: '1:1', creativeMode: 'free', creativeIntent: '旧', humanPresence: 'auto',
+    } }));
+    const first = writer.flush();
+    writer.schedule(WorkspaceDraftSchema.parse({ heroOptions: {
+      sourceAssetId: '', ratio: '1:1', creativeMode: 'free', creativeIntent: '新', humanPresence: 'auto',
+    } }));
+    const second = writer.flush();
+    await started;
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(completed).toEqual(['旧', '新']);
   });
 });
 
