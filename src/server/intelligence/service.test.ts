@@ -5,10 +5,8 @@ import sharp from 'sharp';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { analyzeMock } = vi.hoisted(() => ({ analyzeMock: vi.fn() }));
-vi.mock('@/server/providers/aliyun-qwen-vision', () => ({
-  AliyunQwenVisionProvider: class {
-    analyze(...args: unknown[]) { return analyzeMock(...args); }
-  },
+vi.mock('@/server/providers/factory', () => ({
+  createActiveVisionProvider: async () => ({ analyze: (...args: unknown[]) => analyzeMock(...args) }),
 }));
 
 import { saveAsset, setAssetRole } from '@/server/assets/service';

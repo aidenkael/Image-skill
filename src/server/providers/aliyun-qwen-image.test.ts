@@ -1,167 +1,45 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import sharp from 'sharp';
-import {
-  AliyunQwenImageProvider,
-  DEFAULT_DASHSCOPE_API_URL,
-  QWEN_IMAGE_MODEL,
-  TOKEN_PLAN_API_URL,
-  resolveDashScopeApiUrl,
-} from './aliyun-qwen-image';
-import { ProviderConfigError, ProviderRequestError } from './image-provider';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AliyunQwenImageProvider, qwenSizeForRatio } from './aliyun-qwen-image';
+import type { ResolvedImageConfig } from '@/server/settings/ai';
 
-/**
- * Provider 定向测试：不消耗付费额度（fetch 全部打桩）。
- * 覆盖：无 Key 配置错误、模型与参数（n / size / prompt_extend=true）、
- * 请求内容构造、端点选择。
- */
-
-let workDir: string;
-let imagePath: string;
-
-interface CapturedRequest {
-  url?: string;
-  headers?: Record<string, string>;
-  payload?: {
-    model: string;
-    input: { messages: { role: string; content: { image?: string; text?: string }[] }[] };
-    parameters: { n: number; prompt_extend: boolean; size: string };
-  };
-}
-
-function stubFetch(images: { url: string }[], captured: CapturedRequest) {
-  const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
-    captured.url = String(url);
-    captured.headers = init.headers as Record<string, string>;
-    captured.payload = JSON.parse(String(init.body));
-    return new Response(JSON.stringify({ output: { results: images } }), { status: 200 });
-  });
-  vi.stubGlobal('fetch', fetchMock);
-  return fetchMock;
-}
+let root = '';
+let imagePath = '';
+const config: ResolvedImageConfig = {
+  profileId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', apiKey: 'sk-sp-exact-key',
+  enabled: true, driver: 'dashscope-qwen-image', endpoint: 'https://stored.example/qwen', model: 'stored-qwen-model',
+};
 
 beforeAll(async () => {
-  workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'qwen-provider-test-'));
-  process.env.RUNTIME_DIR = path.join(workDir, '.runtime');
-  imagePath = path.join(workDir, 'input.png');
-  await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ff0000' } })
-    .png()
-    .toFile(imagePath);
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'qwen-image-'));
+  imagePath = path.join(root, 'source.png');
+  await fs.writeFile(imagePath, Buffer.from('image-bytes'));
 });
+afterAll(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
-afterAll(async () => {
-  delete process.env.RUNTIME_DIR;
-  await fs.rm(workDir, { recursive: true, force: true });
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  delete process.env.DASHSCOPE_API_KEY;
-  delete process.env.DASHSCOPE_API_URL;
-});
-
-describe('AliyunQwenImageProvider', () => {
-  it('未配置 DASHSCOPE_API_KEY 时抛出明确的 ProviderConfigError', async () => {
-    delete process.env.DASHSCOPE_API_KEY;
-    const provider = new AliyunQwenImageProvider();
-    await expect(
-      provider.generate({ imagePath, prompt: 'p', size: '1024*1024', count: 1 }),
-    ).rejects.toThrowError(ProviderConfigError);
-    await expect(
-      provider.generate({ imagePath, prompt: 'p', size: '1024*1024', count: 1 }),
-    ).rejects.toThrow(/AI 尚未配置/);
-  });
-
-  it('请求体使用 qwen-image-3.0-pro，且 n / size / prompt_extend 正确', async () => {
-    process.env.DASHSCOPE_API_KEY = 'sk-test-key';
-    const captured: CapturedRequest = {};
-    stubFetch([{ url: 'https://cdn.example/a.png' }, { url: 'https://cdn.example/b.png' }], captured);
-
-    const provider = new AliyunQwenImageProvider();
-    const result = await provider.generate({
-      imagePath,
-      prompt: 'scene prompt',
-      size: '768*1344',
-      count: 2,
-    });
-
-    expect(captured.payload?.model).toBe(QWEN_IMAGE_MODEL);
-    expect(captured.payload?.model).toBe('qwen-image-3.0-pro');
-    expect(captured.payload?.parameters.prompt_extend).toBe(true);
-    expect(captured.payload?.parameters.n).toBe(2);
-    expect(captured.payload?.parameters.size).toBe('768*1344');
-    expect(result.map((r) => r.url)).toEqual([
-      'https://cdn.example/a.png',
-      'https://cdn.example/b.png',
-    ]);
-  });
-
-  it('prompt 原样进入请求文本内容，图片以 base64 data URL 提供', async () => {
-    process.env.DASHSCOPE_API_KEY = 'sk-test-key';
-    const captured: CapturedRequest = {};
-    stubFetch([{ url: 'https://cdn.example/a.png' }], captured);
-
-    await new AliyunQwenImageProvider().generate({
-      imagePath,
-      prompt: 'Keep the product unchanged. Scene: studio light',
-      size: '1024*1024',
-      count: 1,
-    });
-
-    const content = captured.payload?.input.messages[0].content ?? [];
-    expect(content.some((c) => c.text === 'Keep the product unchanged. Scene: studio light')).toBe(
-      true,
-    );
-    expect(content.some((c) => c.image?.startsWith('data:image/png;base64,'))).toBe(true);
-    expect(captured.headers?.Authorization).toBe('Bearer sk-test-key');
-  });
-
-  it('返回数量按请求 count 截断', async () => {
-    process.env.DASHSCOPE_API_KEY = 'sk-test-key';
-    const captured: CapturedRequest = {};
-    stubFetch(
-      [
-        { url: 'https://cdn.example/a.png' },
-        { url: 'https://cdn.example/b.png' },
-        { url: 'https://cdn.example/c.png' },
-      ],
-      captured,
-    );
-    const result = await new AliyunQwenImageProvider().generate({
-      imagePath,
-      prompt: 'p',
-      size: '1024*1024',
-      count: 2,
-    });
+describe('Qwen 图片 Provider', () => {
+  it('使用精确存储的端点/模型/Key并保留参数与比例映射', async () => {
+    let captured: { url?: string; authorization?: string; body?: Record<string, unknown> } = {};
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      captured = { url, authorization: (init.headers as Record<string, string>).Authorization, body: JSON.parse(String(init.body)) };
+      return Response.json({ output: { results: [{ url: 'https://cdn.example/1.png' }, { url: 'https://cdn.example/2.png' }] } });
+    }));
+    const result = await new AliyunQwenImageProvider(config).generate({ imagePath, prompt: 'hero', ratio: '3:4', count: 2 });
     expect(result).toHaveLength(2);
+    expect(captured.url).toBe(config.endpoint);
+    expect(captured.authorization).toBe(`Bearer ${config.apiKey}`);
+    expect(captured.body).toMatchObject({ model: config.model, parameters: { n: 2, prompt_extend: true, size: '768*1344' } });
+    expect(JSON.stringify(captured.body)).toContain('data:image/png;base64,');
+    vi.unstubAllGlobals();
   });
 
-  it('响应中没有图片时抛出 ProviderRequestError', async () => {
-    process.env.DASHSCOPE_API_KEY = 'sk-test-key';
-    const captured: CapturedRequest = {};
-    stubFetch([], captured);
-    await expect(
-      new AliyunQwenImageProvider().generate({
-        imagePath,
-        prompt: 'p',
-        size: '1024*1024',
-        count: 1,
-      }),
-    ).rejects.toThrowError(ProviderRequestError);
-  });
-});
-
-describe('端点选择', () => {
-  it('标准 Key 走默认端点；sk-sp- Token Plan 凭证走专用端点', () => {
-    delete process.env.DASHSCOPE_API_URL;
-    expect(resolveDashScopeApiUrl('sk-abc')).toBe(DEFAULT_DASHSCOPE_API_URL);
-    expect(resolveDashScopeApiUrl('sk-sp-abc')).toBe(TOKEN_PLAN_API_URL);
-  });
-
-  it('显式 DASHSCOPE_API_URL 优先', () => {
-    process.env.DASHSCOPE_API_URL = 'https://custom.example/gen';
-    expect(resolveDashScopeApiUrl('sk-sp-abc')).toBe('https://custom.example/gen');
+  it('数量不足整体失败，比例映射保持 seller 选项', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ output: { results: [{ url: 'https://cdn.example/1.png' }] } })));
+    await expect(new AliyunQwenImageProvider(config).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 2 })).rejects.toThrow(/数量不完整/);
+    expect(qwenSizeForRatio('1:1')).toBe('1024*1024');
+    expect(qwenSizeForRatio('4:3')).toBe('1344*768');
+    vi.unstubAllGlobals();
   });
 });

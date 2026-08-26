@@ -31,7 +31,7 @@ SHEIN 类电商商品视觉工作台：卖家上传真实商品图，选择任�
 - 任务切换保留各自状态；detail 仅作为后续提示，不得静默调用其他任务。
 - 商品分析只由用户显式触发，不在上传、刷新或 Workspace 切换时自动调用。
 - Hero 默认自由创作且不依赖商品分析；商品专属方向只消费新鲜的 Visual Plan；自定义想法同样不依赖分析。Collage 只消费文案建议，服务端执行始终确定性。
-- UI 不暴露 raw prompt 或 Agent 概念；AI 设置仅展示 Provider、固定模型 id、掩码 Key 与来源。
+- UI 不暴露 raw prompt 或 Agent 概念；AI 设置管理可编辑的 Provider 预设、端点、模型、掩码 Key 与识图/生图独立活动配置。
 - 上传支持拖拽；资源角色可修正；商品草稿以 400ms 防抖持久化；刷新后恢复最近一次 hero/optimize 任务结果与拼图编辑状态；
   hero 每张结果提供同源下载；生成数量不完整（少于请求数）即整体失败，不以部分结果冒充成功；分析与 Hero 的运行状态按 Workspace 落盘，切换/刷新后继续轮询，活动付费操作锁定其使用的素材。
 
@@ -101,11 +101,11 @@ templates/
 - hero 结果下载到 `.runtime/workspaces/<workspaceId>/outputs/<taskId>/`，通过客户端安全 URL 提供；
   不向客户端暴露本地绝对路径，不存 base64 图片体。
 - 商品理解 API：`GET/POST /api/workspaces/:workspaceId/intelligence`；结果保存在当前 Workspace。
-- Provider 契约：`ProductIntelligenceProvider.analyze(...)` 使用 qwen3.7-plus；
-  `ImageProvider.generate(...)` 使用 qwen-image-3.0-pro，Hero 请求参数固定 `prompt_extend: true`。
+- Provider 契约：`ProductIntelligenceProvider.analyze(...)` 由活动识图配置解析；
+  `ImageProvider.generate(...)` 由活动生图配置解析。百炼 Hero 保持 `prompt_extend: true`，火山方舟按请求数量逐张生成。
 - Collage 服务端不调用 AI；Optimize 仅调用 Sharp。
 - hero 结果数量必须等于请求数量，否则任务整体失败。
-- AI Key 优先读取 `.runtime/settings/ai.json` 的本机覆盖，其次读取 `DASHSCOPE_API_KEY`；未配置时返回明确错误，不伪造成功结果，完整 Key 不进入浏览器存储或响应。
+- AI Profile 以 `.runtime/settings/ai-profiles.json` 为唯一运行时事实源；旧 Key/环境变量只在文件不存在时迁移一次。完整 Key 不进入浏览器存储或响应，端点不根据 Key 前缀推断。
 
 ## 8. V1 开发顺序
 

@@ -5,7 +5,7 @@ export class ProviderRequestError extends Error {}
 export function providerHttpError(status: number): ProviderRequestError {
   if (status === 401 || status === 403) {
     return new ProviderRequestError(
-      'AI Key 无效、区域不匹配或当前模型未授权，请检查 AI 设置与百炼模型权限。',
+      'AI Key 无效、区域不匹配或当前模型未授权，请检查 AI 设置与模型权限。',
     );
   }
   if (status === 429) {

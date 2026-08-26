@@ -5,7 +5,7 @@ import { isIntelligenceFresh, type ProductIntelligenceRecord } from '@/core/inte
 import { TaskResult, taskOutputUrl } from '@/core/results';
 import { assetFile, listAssets } from '@/server/assets/service';
 import { getWorkspaceIntelligence } from '@/server/intelligence/service';
-import { AliyunQwenImageProvider } from '@/server/providers/aliyun-qwen-image';
+import { createActiveImageProvider } from '@/server/providers/factory';
 import { providerFetchError, providerHttpError } from '@/server/providers/provider-errors';
 import { ensureDir } from '@/server/storage/fs-store';
 import { readImageMeta } from '@/server/image/sharp';
@@ -101,11 +101,11 @@ export async function runHeroTask(
     if (!concept) throw new Error('所选商品专属创意方向不存在，请重新选择');
   }
 
-  const provider = new AliyunQwenImageProvider();
+  const provider = await createActiveImageProvider();
   const generated = await provider.generate({
     imagePath: source.filePath,
     prompt: buildHeroPrompt(request, concept),
-    size: heroSizeForRatio(opts.ratio),
+    ratio: opts.ratio,
     count: request.count,
   });
 

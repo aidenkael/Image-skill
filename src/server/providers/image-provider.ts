@@ -6,7 +6,7 @@
 export interface ImageGenerationInput {
   imagePath: string;
   prompt: string;
-  size: string;
+  ratio: '1:1' | '3:4' | '4:3';
   count: number;
 }
 

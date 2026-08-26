@@ -14,8 +14,8 @@ const { generateMock, assetFileMock, listAssetsMock, intelligenceMock } = vi.hoi
 }));
 vi.mock('@/server/assets/service', () => ({ assetFile: assetFileMock, listAssets: listAssetsMock }));
 vi.mock('@/server/intelligence/service', () => ({ getWorkspaceIntelligence: intelligenceMock }));
-vi.mock('@/server/providers/aliyun-qwen-image', () => ({
-  AliyunQwenImageProvider: class { generate(...args: unknown[]) { return generateMock(...args); } },
+vi.mock('@/server/providers/factory', () => ({
+  createActiveImageProvider: async () => ({ generate: (...args: unknown[]) => generateMock(...args) }),
 }));
 
 import { buildHeroPrompt, heroSizeForRatio, runHeroTask } from './hero';
@@ -139,7 +139,7 @@ describe('Hero 执行与新鲜分析要求', () => {
       creativeMode: 'concept', conceptId: concept.id,
     }), cryptoId());
     expect(assetFileMock).toHaveBeenCalledWith(workspaceId, ASSET_ID, 'original');
-    expect(generateMock).toHaveBeenCalledWith(expect.objectContaining({ imagePath: 'selected.png' }));
+    expect(generateMock).toHaveBeenCalledWith(expect.objectContaining({ imagePath: 'selected.png', ratio: '1:1' }));
   });
 
   it('完整结果只返回安全 URL，数量不足时整体失败', async () => {

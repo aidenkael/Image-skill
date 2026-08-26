@@ -19,7 +19,7 @@ import { HeroControls } from '@/features/hero/components/HeroControls';
 import { ProductInsightBar } from '@/features/intelligence/components/ProductInsightBar';
 import { useProductIntelligence } from '@/features/intelligence/model/useProductIntelligence';
 import { OptimizeControls } from '@/features/optimize/components/OptimizeControls';
-import { useSystemStatus } from '@/features/system/model/useSystemStatus';
+import { useAISettings } from '@/features/system/model/useSystemStatus';
 import { CanvasArea } from '@/features/workbench/components/CanvasArea';
 import { WorkbenchHeader } from '@/features/workbench/components/WorkbenchHeader';
 import { useWorkbench } from '@/features/workbench/model/workbench';
@@ -29,7 +29,7 @@ export function Workbench() {
   const workspaces = useWorkspaces();
   const wb = useWorkbench(workspaces.activeWorkspaceId);
   const intelligence = useProductIntelligence(workspaces.activeWorkspaceId, wb.assets);
-  const systemStatus = useSystemStatus();
+  const aiSettings = useAISettings();
   const collageEditorRef = useRef<CollageEditorHandle | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const templates = listCollageTemplates();
@@ -175,9 +175,16 @@ export function Workbench() {
         kind={wb.kind}
         hydrated={wb.hydrated}
         createOpen={createOpen}
-        aiStatus={systemStatus.status}
+        aiSettings={aiSettings.settings}
+        aiLoading={aiSettings.loading}
+        aiActions={{
+          createProfile: aiSettings.createProfile,
+          updateProfile: aiSettings.updateProfile,
+          deleteProfile: aiSettings.deleteProfile,
+          setActiveProfiles: aiSettings.setActiveProfiles,
+          testProfile: aiSettings.testProfile,
+        }}
         heroRunning={wb.heroBusy}
-        onAIStatusChange={systemStatus.setStatus}
         onCreateOpenChange={setCreateOpen}
         onKindChange={wb.setKind}
       />
@@ -219,6 +226,7 @@ export function Workbench() {
               error={intelligence.error}
               fresh={intelligence.fresh}
               hasUnanalyzedAssets={intelligence.hasUnanalyzedAssets}
+              aiConfigured={Boolean(aiSettings.settings?.activeVisionProfileId)}
               onAnalyze={() => void handleAnalyze()}
             />
             {wb.assets.length === 0 ? (
@@ -251,7 +259,7 @@ export function Workbench() {
                 intelligence={freshIntelligence}
                 count={wb.heroCount}
                 busy={wb.heroBusy}
-                aiConfigured={Boolean(systemStatus.status?.configured)}
+                aiConfigured={Boolean(aiSettings.settings?.activeImageProfileId)}
                 onChange={wb.patchHeroOptions}
                 onCountChange={wb.setHeroCount}
                 onGenerate={() => void wb.runHero()}
@@ -278,7 +286,7 @@ export function Workbench() {
             {wb.kind === 'optimize' ? (
               <OptimizeControls options={wb.optimizeOptions} assets={wb.assets} busy={wb.optimizeBusy} onChange={wb.patchOptimizeOptions} onRun={() => void wb.runOptimize()} />
             ) : null}
-            <StatusBar busy={currentBusy} error={wb.error ?? systemStatus.error} notice={wb.notice} />
+            <StatusBar busy={currentBusy} error={wb.error ?? aiSettings.error} notice={wb.notice} />
           </aside>
         </div>
       )}

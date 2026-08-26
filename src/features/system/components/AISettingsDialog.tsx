@@ -1,90 +1,232 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import type { AISettingsStatus } from '@/core/system';
-import { clearAIKey, saveAIKey, testAIConnection } from '@/features/system/model/api';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  AIProfileInputSchema,
+  PROVIDER_PRESET_LABELS,
+  profileDefaults,
+  type AIConnectionCapability,
+  type AIProfileInput,
+  type AIProfilePreset,
+  type AIProfilePublic,
+  type AISettingsPublic,
+  type ActiveAIProfilesInput,
+} from '@/core/system';
 
-interface Props {
-  open: boolean;
-  status: AISettingsStatus | null;
-  onClose(): void;
-  onStatusChange(status: AISettingsStatus): void;
+export interface AISettingsActions {
+  createProfile(input: AIProfileInput): Promise<AISettingsPublic>;
+  updateProfile(id: string, input: AIProfileInput): Promise<AISettingsPublic>;
+  deleteProfile(id: string): Promise<AISettingsPublic>;
+  setActiveProfiles(input: ActiveAIProfilesInput): Promise<AISettingsPublic>;
+  testProfile(id: string, capability: AIConnectionCapability): Promise<{ ok: true; message: string }>;
 }
 
-const SOURCE_LABELS = {
-  runtime: '工作台本机运行时',
-  environment: '环境变量',
-  none: '未配置',
-} as const;
+interface Props extends AISettingsActions {
+  open: boolean;
+  settings: AISettingsPublic | null;
+  loading: boolean;
+  onClose(): void;
+}
 
-export function AISettingsDialog({ open, status, onClose, onStatusChange }: Props) {
-  const [apiKey, setApiKey] = useState('');
+type Draft = AIProfileInput & { apiKey: string };
+
+function newDraft(preset: AIProfilePreset = 'aliyun-qwen'): Draft {
+  const defaults = profileDefaults(preset);
+  return {
+    name: preset === 'aliyun-qwen' ? '百炼配置' : preset === 'volcengine-ark' ? 'Seedream 配置' : '自定义配置',
+    preset,
+    apiKey: '',
+    vision: { ...defaults.vision },
+    image: { ...defaults.image },
+  };
+}
+
+function profileDraft(profile: AIProfilePublic): Draft {
+  return {
+    name: profile.name,
+    preset: profile.preset,
+    apiKey: '',
+    vision: { ...profile.vision },
+    image: { ...profile.image },
+  };
+}
+
+export function AISettingsDialog(props: Props) {
+  const { open, settings, loading, onClose } = props;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Draft>(() => newDraft());
+  const [isNew, setIsNew] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
-    if (!open) return;
-    setApiKey('');
+    if (!open || !settings) return;
+    const current = settings.profiles.find((profile) => profile.id === selectedId) ?? settings.profiles[0];
+    if (current) {
+      setSelectedId(current.id);
+      setDraft(profileDraft(current));
+      setIsNew(false);
+    } else {
+      setSelectedId(null);
+      setDraft(newDraft());
+      setIsNew(true);
+    }
+    setConfirmDelete(false);
     setMessage(null);
     setError(null);
+    // Dialog initialization intentionally follows open/settings identity, not local selection edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  const validationError = useMemo(() => {
+    const parsed = AIProfileInputSchema.safeParse({
+      ...draft,
+      apiKey: draft.apiKey.trim() || undefined,
+    });
+    if (isNew && draft.apiKey.trim().length < 8) return '新建配置时必须填写至少 8 个字符的 API Key';
+    return parsed.success ? null : parsed.error.issues[0]?.message ?? '请检查配置内容';
+  }, [draft, isNew]);
+
   if (!open) return null;
+  const selectedProfile = settings?.profiles.find((profile) => profile.id === selectedId) ?? null;
 
-  async function run(action: () => Promise<AISettingsStatus>, success: string) {
-    setBusy(true);
-    setError(null);
+  function selectProfile(profile: AIProfilePublic) {
+    setSelectedId(profile.id);
+    setDraft(profileDraft(profile));
+    setIsNew(false);
+    setConfirmDelete(false);
     setMessage(null);
+    setError(null);
+  }
+
+  function startNew() {
+    setSelectedId(null);
+    setDraft(newDraft());
+    setIsNew(true);
+    setConfirmDelete(false);
+    setMessage(null);
+    setError(null);
+  }
+
+  function changePreset(preset: AIProfilePreset) {
+    const defaults = profileDefaults(preset);
+    setDraft((current) => ({
+      ...current,
+      preset,
+      vision: { ...defaults.vision },
+      image: { ...defaults.image },
+    }));
+  }
+
+  async function run<T>(action: () => Promise<T>, success: string): Promise<T | null> {
+    setBusy(true); setMessage(null); setError(null);
     try {
-      const next = await action();
-      onStatusChange(next);
-      setApiKey('');
+      const result = await action();
       setMessage(success);
+      return result;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
+      return null;
+    } finally { setBusy(false); }
+  }
+
+  async function save() {
+    if (validationError) return;
+    const input: AIProfileInput = { ...draft, apiKey: draft.apiKey.trim() || undefined };
+    if (isNew) {
+      const next = await run(() => props.createProfile(input), '配置已创建并立即生效');
+      const created = next?.profiles.at(-1);
+      if (created) {
+        selectProfile(created);
+        setMessage('配置已创建并立即生效');
+      }
+    } else if (selectedId) {
+      const next = await run(() => props.updateProfile(selectedId, input), '配置已保存并立即生效');
+      const updated = next?.profiles.find((profile) => profile.id === selectedId);
+      if (updated) {
+        selectProfile(updated);
+        setMessage('配置已保存并立即生效');
+      }
     }
   }
 
-  async function testConnection() {
-    setBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await testAIConnection();
-      setMessage(result.message);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
+  async function remove() {
+    if (!selectedId) return;
+    const deletingId = selectedId;
+    const next = await run(() => props.deleteProfile(deletingId), '配置已删除');
+    if (!next) return;
+    const replacement = next.profiles[0];
+    if (replacement) selectProfile(replacement); else startNew();
+    setMessage('配置已删除');
   }
+
+  async function setActive(capability: AIConnectionCapability, value: string) {
+    if (!settings) return;
+    await run(() => props.setActiveProfiles({
+      visionProfileId: capability === 'vision' ? value || null : settings.activeVisionProfileId,
+      imageProfileId: capability === 'image' ? value || null : settings.activeImageProfileId,
+    }), capability === 'vision' ? '商品分析配置已切换' : '氛围主图配置已切换');
+  }
+
+  async function test(capability: AIConnectionCapability) {
+    if (!selectedId) return;
+    await run(() => props.testProfile(selectedId, capability), capability === 'vision' ? '商品分析连接成功' : '氛围主图连接成功');
+  }
+
+  const visionProfiles = settings?.profiles.filter((profile) => profile.vision.enabled) ?? [];
+  const imageProfiles = settings?.profiles.filter((profile) => profile.image.enabled) ?? [];
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-settings-title">
-        <div className="dialog-title"><h2 id="ai-settings-title">AI 设置</h2><button type="button" className="dialog-close" onClick={onClose}>关闭</button></div>
-        <dl className="settings-summary">
-          <div><dt>Provider</dt><dd>{status?.provider ?? '读取中…'}</dd></div>
-          <div><dt>商品分析模型</dt><dd>{status?.visionModel ?? '读取中…'}</dd></div>
-          <div><dt>氛围主图模型</dt><dd>{status?.imageModel ?? '读取中…'}</dd></div>
-          <div><dt>当前 Key</dt><dd>{status?.maskedKey ?? '未配置'}</dd></div>
-          <div><dt>Key 来源</dt><dd>{status ? SOURCE_LABELS[status.source] : '读取中…'}</dd></div>
-        </dl>
-        <div className="field">
-          <label className="field-label" htmlFor="runtime-ai-key">输入新 Key 并保存到本机运行时</label>
-          <input id="runtime-ai-key" className="input" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="DashScope API Key" />
+      <section className="settings-dialog settings-center" role="dialog" aria-modal="true" aria-labelledby="ai-settings-title">
+        <div className="dialog-title"><div><h2 id="ai-settings-title">AI 设置</h2><p>分别管理商品分析与氛围主图使用的 API。</p></div><button type="button" className="dialog-close" onClick={onClose}>关闭</button></div>
+
+        <div className="active-profile-selectors">
+          <label>商品分析使用<select value={settings?.activeVisionProfileId ?? ''} disabled={busy || loading} onChange={(event) => void setActive('vision', event.target.value)}><option value="">未选择</option>{visionProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
+          <label>氛围主图使用<select value={settings?.activeImageProfileId ?? ''} disabled={busy || loading} onChange={(event) => void setActive('image', event.target.value)}><option value="">未选择</option>{imageProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
         </div>
-        <div className="dialog-actions">
-          <button type="button" className="btn btn-primary" disabled={busy || apiKey.trim().length < 8} onClick={() => void run(() => saveAIKey(apiKey), '工作台 Key 已保存并立即生效')}>保存工作台 Key</button>
-          <button type="button" className="btn" disabled={busy || status?.source !== 'runtime'} onClick={() => void run(clearAIKey, '工作台 Key 已清除，已回退到环境变量')}>清除并回退环境变量</button>
-          <button type="button" className="btn" disabled={busy || !status?.configured} onClick={() => void testConnection()}>测试商品分析连接</button>
+
+        <div className="settings-center-body">
+          <aside className="profile-list">
+            <button type="button" className="btn profile-new" onClick={startNew}>＋ 新建配置</button>
+            {settings?.profiles.map((profile) => (
+              <button key={profile.id} type="button" className={`profile-row${profile.id === selectedId && !isNew ? ' is-active' : ''}`} onClick={() => selectProfile(profile)}>
+                <strong>{profile.name}</strong><span>{PROVIDER_PRESET_LABELS[profile.preset]}</span><small>{profile.vision.enabled ? '识图 ' : ''}{profile.image.enabled ? '生图' : ''}</small>
+              </button>
+            ))}
+            {settings?.profiles.length === 0 ? <p className="hint">尚无已保存配置</p> : null}
+          </aside>
+
+          <div className="profile-editor">
+            <div className="profile-editor-heading"><strong>{isNew ? '新建配置' : '编辑配置'}</strong>{!isNew ? <button type="button" className="danger-link" onClick={() => setConfirmDelete(true)}>删除</button> : null}</div>
+            {confirmDelete ? <div className="delete-confirm"><span>确定删除“{selectedProfile?.name}”吗？</span><button type="button" className="btn danger-button" disabled={busy} onClick={() => void remove()}>确认删除</button><button type="button" className="btn" onClick={() => setConfirmDelete(false)}>取消</button></div> : null}
+            <div className="profile-fields">
+              <label className="field">配置名称<input className="input" maxLength={60} value={draft.name} onChange={(event) => setDraft((value) => ({ ...value, name: event.target.value }))} /></label>
+              <label className="field">提供商预设<select className="input" value={draft.preset} onChange={(event) => changePreset(event.target.value as AIProfilePreset)}>{Object.entries(PROVIDER_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label className="field">API Key<input className="input" type="password" autoComplete="new-password" value={draft.apiKey} onChange={(event) => setDraft((value) => ({ ...value, apiKey: event.target.value }))} placeholder={isNew ? '必填，仅保存在服务端' : `${selectedProfile?.maskedKey ?? ''}（留空保持不变）`} /></label>
+            </div>
+
+            <CapabilityEditor title="商品分析" enabled={draft.vision.enabled} onEnabled={(enabled) => setDraft((value) => ({ ...value, vision: { ...value.vision, enabled } }))} driver={draft.vision.driver} driverOptions={[['openai-compatible-vision', 'OpenAI 兼容识图']]} onDriver={(driver) => setDraft((value) => ({ ...value, vision: { ...value.vision, driver: driver as 'openai-compatible-vision' } }))} endpoint={draft.vision.endpoint} onEndpoint={(endpoint) => setDraft((value) => ({ ...value, vision: { ...value.vision, endpoint } }))} model={draft.vision.model} onModel={(model) => setDraft((value) => ({ ...value, vision: { ...value.vision, model } }))} onTest={() => void test('vision')} canTest={!isNew && draft.vision.enabled && !busy} />
+            <CapabilityEditor title="氛围主图" enabled={draft.image.enabled} onEnabled={(enabled) => setDraft((value) => ({ ...value, image: { ...value.image, enabled } }))} driver={draft.image.driver} driverOptions={[["dashscope-qwen-image", '百炼千问图片'], ["volcengine-ark-image", '火山方舟图片']]} onDriver={(driver) => setDraft((value) => ({ ...value, image: { ...value.image, driver: driver as Draft['image']['driver'] } }))} endpoint={draft.image.endpoint} onEndpoint={(endpoint) => setDraft((value) => ({ ...value, image: { ...value.image, endpoint } }))} model={draft.image.model} onModel={(model) => setDraft((value) => ({ ...value, image: { ...value.image, model } }))} onTest={() => void test('image')} canTest={!isNew && draft.image.enabled && !busy} />
+
+            {validationError ? <div className="validation-hint">{validationError}</div> : null}
+            <div className="dialog-actions"><button type="button" className="btn btn-primary" disabled={busy || Boolean(validationError)} onClick={() => void save()}>{busy ? '处理中…' : '保存配置'}</button></div>
+            {message ? <div className="status-notice">{message}</div> : null}
+            {error ? <div className="status-error">{error}</div> : null}
+          </div>
         </div>
-        <p className="hint">测试连接会产生极少量模型调用。</p>
-        <p className="hint">qwen-image-3.0-pro 需要相应模型权限；实际图片生成权限由第一次真实生成调用确认。</p>
-        {message ? <div className="status-notice">{message}</div> : null}
-        {error ? <div className="status-error">{error}</div> : null}
       </section>
     </div>
   );
+}
+
+function CapabilityEditor(props: {
+  title: string; enabled: boolean; onEnabled(value: boolean): void;
+  driver: string; driverOptions: readonly (readonly [string, string])[]; onDriver(value: string): void;
+  endpoint: string; onEndpoint(value: string): void; model: string; onModel(value: string): void;
+  onTest(): void; canTest: boolean;
+}) {
+  return <fieldset className="capability-editor"><legend>{props.title}</legend><label className="capability-toggle"><input type="checkbox" checked={props.enabled} onChange={(event) => props.onEnabled(event.target.checked)} />启用</label><label className="field">协议<select className="input" value={props.driver} onChange={(event) => props.onDriver(event.target.value)}>{props.driverOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field">接口地址<input className="input" value={props.endpoint} onChange={(event) => props.onEndpoint(event.target.value)} /></label><label className="field">模型<input className="input" maxLength={120} value={props.model} onChange={(event) => props.onModel(event.target.value)} /></label><button type="button" className="btn test-button" disabled={!props.canTest} onClick={props.onTest}>测试连接</button></fieldset>;
 }

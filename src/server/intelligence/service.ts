@@ -11,7 +11,7 @@ import {
 } from '@/core/intelligence';
 import { assetFile, listAssets } from '@/server/assets/service';
 import { makeVisionPreview } from '@/server/image/sharp';
-import { AliyunQwenVisionProvider } from '@/server/providers/aliyun-qwen-vision';
+import { createActiveVisionProvider } from '@/server/providers/factory';
 import { readJson, writeJson } from '@/server/storage/fs-store';
 import { getWorkspace, workspaceRuntimePath } from '@/server/workspaces/service';
 
@@ -189,7 +189,8 @@ export async function analyzeWorkspace(
       }),
     );
 
-    const rawPayload = await new AliyunQwenVisionProvider().analyze({
+    const provider = await createActiveVisionProvider();
+    const rawPayload = await provider.analyze({
       workspaceName: workspace.name,
       assets: providerInputs,
     });

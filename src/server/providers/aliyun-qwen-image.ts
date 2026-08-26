@@ -1,120 +1,65 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {
-  ImageProvider,
-  ImageGenerationInput,
-  GeneratedImage,
-  ProviderConfigError,
-  ProviderRequestError,
-} from './image-provider';
-import { providerFetchError, providerHttpError } from './provider-errors';
-import { resolveAICredential } from '@/server/settings/ai';
-
-/**
- * DashScope / 阿里云百炼 qwen-image-3.0-pro 图片编辑 Provider。
- * 请求/响应解析只允许出现在本文件内（src/server/providers/**）。
- */
-
-export const DEFAULT_DASHSCOPE_API_URL =
-  'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
-export const TOKEN_PLAN_API_URL =
-  'https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
-export const QWEN_IMAGE_MODEL = 'qwen-image-3.0-pro';
+import type { ResolvedImageConfig } from '@/server/settings/ai';
+import type { GeneratedImage, ImageGenerationInput, ImageProvider } from './image-provider';
+import { ProviderRequestError, providerFetchError, providerHttpError } from './provider-errors';
 
 const MIME_BY_EXT: Record<string, string> = {
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
 };
 
-/** 端点解析：显式 DASHSCOPE_API_URL 优先；sk-sp- Token Plan 凭证走专用端点；其余走默认端点 */
-export function resolveDashScopeApiUrl(apiKey: string): string {
-  if (process.env.DASHSCOPE_API_URL) return process.env.DASHSCOPE_API_URL;
-  if (apiKey.startsWith('sk-sp-')) return TOKEN_PLAN_API_URL;
-  return DEFAULT_DASHSCOPE_API_URL;
+export function qwenSizeForRatio(ratio: ImageGenerationInput['ratio']): string {
+  if (ratio === '3:4') return '768*1344';
+  if (ratio === '4:3') return '1344*768';
+  return '1024*1024';
 }
 
 export class AliyunQwenImageProvider implements ImageProvider {
-  async generate(input: ImageGenerationInput): Promise<GeneratedImage[]> {
-    const credential = await resolveAICredential();
-    if (!credential) {
-      throw new ProviderConfigError(
-        'AI 尚未配置，请在工作台 AI 设置中保存 Key，或配置 DASHSCOPE_API_KEY。',
-      );
-    }
-    const apiKey = credential.apiKey;
+  constructor(private readonly config: ResolvedImageConfig) {}
 
+  async generate(input: ImageGenerationInput): Promise<GeneratedImage[]> {
     let imageData: Buffer;
-    try {
-      imageData = await fs.readFile(input.imagePath);
-    } catch {
-      throw new ProviderRequestError('无法读取源商品图片，请重新选择后重试。');
-    }
+    try { imageData = await fs.readFile(input.imagePath); }
+    catch { throw new ProviderRequestError('无法读取源商品图片，请重新选择后重试。'); }
     const ext = path.extname(input.imagePath).slice(1).toLowerCase();
     const mime = MIME_BY_EXT[ext] ?? 'image/png';
-
     const payload = {
-      model: QWEN_IMAGE_MODEL,
-      input: {
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { image: `data:${mime};base64,${imageData.toString('base64')}` },
-              { text: input.prompt },
-            ],
-          },
-        ],
-      },
-      parameters: {
-        n: input.count,
-        prompt_extend: true,
-        size: input.size,
-      },
+      model: this.config.model,
+      input: { messages: [{ role: 'user', content: [
+        { image: `data:${mime};base64,${imageData.toString('base64')}` },
+        { text: input.prompt },
+      ] }] },
+      parameters: { n: input.count, prompt_extend: true, size: qwenSizeForRatio(input.ratio) },
     };
 
-    const url = resolveDashScopeApiUrl(apiKey);
-    // 不打印 API Key，不打印 base64 图片体
-    let res: Response;
+    let response: Response;
     try {
-      res = await fetch(url, {
+      response = await fetch(this.config.endpoint, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${this.config.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(180_000),
       });
-    } catch (error) {
-      throw providerFetchError(error);
+    } catch (error) { throw providerFetchError(error); }
+    if (!response.ok) {
+      console.error('[qwen image] upstream request failed', { status: response.status });
+      throw providerHttpError(response.status);
     }
 
-    if (!res.ok) {
-      console.error('[qwen image] upstream request failed', { status: res.status });
-      throw providerHttpError(res.status);
-    }
-
-    const body = (await res.json()) as Record<string, unknown>;
-    const output = (body.output ?? {}) as {
+    let body: unknown;
+    try { body = await response.json(); } catch { throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。'); }
+    const output = ((body as { output?: unknown }).output ?? {}) as {
       choices?: { message?: { content?: { image?: string }[] } }[];
       results?: { url?: string }[];
     };
-
     const images: GeneratedImage[] = [];
-    // 响应形态 1：output.choices[].message.content[].image
     for (const choice of output.choices ?? []) {
-      const firstImage = choice.message?.content?.find((c) => c.image)?.image;
-      if (firstImage) images.push({ url: firstImage });
+      const url = choice.message?.content?.find((item) => item.image)?.image;
+      if (url) images.push({ url });
     }
-    // 响应形态 2：output.results[].url
-    for (const item of output.results ?? []) {
-      if (item.url) images.push({ url: item.url });
-    }
-
-    if (images.length === 0) {
-      throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
+    for (const item of output.results ?? []) if (item.url) images.push({ url: item.url });
+    if (images.length < input.count) {
+      throw new ProviderRequestError(`模型返回结果数量不完整：要求 ${input.count} 张，实际 ${images.length} 张`);
     }
     return images.slice(0, input.count);
   }

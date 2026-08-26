@@ -4,7 +4,8 @@ import type { TaskKind } from '@/core/tasks';
 import type { WorkspacesModel } from '@/features/workspaces/model/useWorkspaces';
 import { WorkspaceSwitcher } from '@/features/workspaces/components/WorkspaceSwitcher';
 import { AIStatusBadge } from '@/features/system/components/AIStatusBadge';
-import type { AISettingsStatus } from '@/core/system';
+import type { AISettingsPublic } from '@/core/system';
+import type { AISettingsActions } from '@/features/system/components/AISettingsDialog';
 
 const TASK_TABS: Array<{ kind: Extract<TaskKind, 'hero' | 'collage' | 'optimize'>; label: string }> = [
   { kind: 'hero', label: '氛围主图' },
@@ -17,9 +18,10 @@ interface WorkbenchHeaderProps {
   kind: TaskKind;
   hydrated: boolean;
   createOpen: boolean;
-  aiStatus: AISettingsStatus | null;
+  aiSettings: AISettingsPublic | null;
+  aiLoading: boolean;
+  aiActions: AISettingsActions;
   heroRunning: boolean;
-  onAIStatusChange(status: AISettingsStatus): void;
   onCreateOpenChange(open: boolean): void;
   onKindChange(kind: TaskKind): void;
 }
@@ -29,9 +31,10 @@ export function WorkbenchHeader({
   kind,
   hydrated,
   createOpen,
-  aiStatus,
+  aiSettings,
+  aiLoading,
+  aiActions,
   heroRunning,
-  onAIStatusChange,
   onCreateOpenChange,
   onKindChange,
 }: WorkbenchHeaderProps) {
@@ -56,7 +59,7 @@ export function WorkbenchHeader({
         ))}
         <span className="future-tab">详情页图 · 后续</span>
       </nav>
-      <AIStatusBadge status={aiStatus} onStatusChange={onAIStatusChange} />
+      <AIStatusBadge settings={aiSettings} loading={aiLoading} actions={aiActions} />
     </header>
   );
 }

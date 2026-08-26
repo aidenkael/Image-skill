@@ -11,6 +11,7 @@ interface ProductInsightBarProps {
   error: string | null;
   fresh: boolean;
   hasUnanalyzedAssets: boolean;
+  aiConfigured: boolean;
   onAnalyze(): void;
 }
 
@@ -24,6 +25,7 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
     error,
     fresh,
     hasUnanalyzedAssets,
+    aiConfigured,
     onAnalyze,
   } = props;
 
@@ -65,7 +67,7 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
           <button
             type="button"
             className="btn"
-            disabled={selectedCount === 0}
+            disabled={selectedCount === 0 || !aiConfigured}
             onClick={onAnalyze}
           >
             重新分析当前选择
@@ -80,7 +82,7 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={selectedCount === 0}
+            disabled={selectedCount === 0 || !aiConfigured}
             onClick={onAnalyze}
           >
             分析已选商品图
@@ -88,6 +90,7 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
         </div>
       )}
       {error ? <div className="status-error insight-error">{error}</div> : null}
+      {!aiConfigured ? <div className="insight-warning">请先在 AI 设置中选择商品分析配置</div> : null}
     </section>
   );
 }

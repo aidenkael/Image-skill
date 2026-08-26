@@ -19,7 +19,7 @@ SHEIN 类电商商品视觉工作台 V1：在浏览器里完成商品理解、**
 - `sharp`（服务端确定性图片操作：缩略图、视觉预览、优化）
 - `zod`（运行时请求/模板校验，唯一事实来源）
 - 本地文件系统存储（`.runtime/`，无数据库）
-- DashScope / 阿里云百炼为 V1 唯一 AI Provider：qwen3.7-plus 用于视觉理解/规划，qwen-image-3.0-pro 用于 Hero 生成
+- 工作台级 AI 配置中心：商品分析支持 OpenAI 兼容识图，Hero 支持百炼千问图片与火山方舟 Seedream，并可分别选择活动配置
 
 ## 快速开始
 
@@ -73,7 +73,7 @@ templates/
     outputs/    # 当前商品的 Hero / Optimize 输出
 ```
 
-AI Key 仅保存在服务端：工作台本机覆盖写入已忽略的 `.runtime/settings/ai.json`，未设置覆盖时回退到 `DASHSCOPE_API_KEY` 环境变量；浏览器端只接收掩码与来源。
+AI 配置仅保存在服务端已忽略的 `.runtime/settings/ai-profiles.json`；浏览器端只接收掩码，不接收完整 Key。旧 `.runtime/settings/ai.json` 或 `DASHSCOPE_API_KEY` 只在新配置文件尚不存在时迁移一次。
 
 活动 API 均以商品工作区为作用域：`/api/workspaces`、
 `/api/workspaces/:workspaceId/draft`、`/api/workspaces/:workspaceId/assets` 与

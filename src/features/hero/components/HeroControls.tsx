@@ -42,7 +42,7 @@ export function HeroControls({
         : options.creativeMode === 'custom' && !options.creativeIntent?.trim()
           ? '请填写你的创作想法。'
           : !aiConfigured
-            ? 'AI 尚未配置，请先在右上角打开 AI 设置。'
+            ? '请先在 AI 设置中选择氛围主图配置'
             : null;
 
   return (

@@ -1,24 +1,43 @@
 'use client';
 
-import type { AISettingsStatus } from '@/core/system';
+import type {
+  AIConnectionCapability,
+  AIProfileInput,
+  AISettingsPublic,
+  ActiveAIProfilesInput,
+} from '@/core/system';
 import { fetchJson } from '@/features/shared/http';
 
-export async function getSystemStatus(): Promise<AISettingsStatus> {
-  return fetchJson<AISettingsStatus>('/api/system/status');
+const SETTINGS_URL = '/api/system/ai-settings';
+
+export function getAISettings(): Promise<AISettingsPublic> {
+  return fetchJson<AISettingsPublic>(SETTINGS_URL);
 }
 
-export async function saveAIKey(apiKey: string): Promise<AISettingsStatus> {
-  return fetchJson<AISettingsStatus>('/api/system/ai-settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey }),
+export function createAIProfile(input: AIProfileInput): Promise<AISettingsPublic> {
+  return fetchJson<AISettingsPublic>(SETTINGS_URL, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
   });
 }
 
-export async function clearAIKey(): Promise<AISettingsStatus> {
-  return fetchJson<AISettingsStatus>('/api/system/ai-settings', { method: 'DELETE' });
+export function updateAIProfile(profileId: string, input: AIProfileInput): Promise<AISettingsPublic> {
+  return fetchJson<AISettingsPublic>(`${SETTINGS_URL}/${profileId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
 }
 
-export async function testAIConnection(): Promise<{ ok: true; message: string }> {
-  return fetchJson<{ ok: true; message: string }>('/api/system/ai-settings', { method: 'POST' });
+export function deleteAIProfile(profileId: string): Promise<AISettingsPublic> {
+  return fetchJson<AISettingsPublic>(`${SETTINGS_URL}/${profileId}`, { method: 'DELETE' });
+}
+
+export function setActiveAIProfiles(input: ActiveAIProfilesInput): Promise<AISettingsPublic> {
+  return fetchJson<AISettingsPublic>(SETTINGS_URL, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+}
+
+export function testAIProfile(profileId: string, capability: AIConnectionCapability) {
+  return fetchJson<{ ok: true; message: string }>(`${SETTINGS_URL}/${profileId}/test`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capability }),
+  });
 }
