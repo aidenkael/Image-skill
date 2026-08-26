@@ -1,5 +1,5 @@
 import type { AssetRole } from '@/core/assets';
-import type { ProductIntelligencePayload } from '@/core/intelligence';
+import type { HeroRuntimePlan, ProductIntelligencePayload } from '@/core/intelligence';
 
 export interface VisionAssetInput {
   assetId: string;
@@ -13,6 +13,13 @@ export interface ProductIntelligenceInput {
   assets: VisionAssetInput[];
 }
 
+export interface HeroPlanningInput {
+  workspaceName: string;
+  asset: VisionAssetInput;
+  creativeIntent?: string;
+}
+
 export interface ProductIntelligenceProvider {
   analyze(input: ProductIntelligenceInput): Promise<ProductIntelligencePayload>;
+  planHero(input: HeroPlanningInput): Promise<HeroRuntimePlan>;
 }

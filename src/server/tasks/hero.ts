@@ -5,10 +5,11 @@ import { isIntelligenceFresh, type ProductIntelligenceRecord } from '@/core/inte
 import { TaskResult, taskOutputUrl } from '@/core/results';
 import { assetFile, listAssets } from '@/server/assets/service';
 import { getWorkspaceIntelligence } from '@/server/intelligence/service';
-import { createActiveImageProvider } from '@/server/providers/factory';
+import { createActiveImageProvider, createActiveVisionProvider } from '@/server/providers/factory';
 import { providerFetchError, providerHttpError } from '@/server/providers/provider-errors';
 import { ensureDir } from '@/server/storage/fs-store';
-import { readImageMeta } from '@/server/image/sharp';
+import { makeVisionPreview, readImageMeta } from '@/server/image/sharp';
+import { getWorkspace } from '@/server/workspaces/service';
 
 /**
  * 氛围主图（hero）任务执行。
@@ -18,12 +19,6 @@ import { readImageMeta } from '@/server/image/sharp';
 const PRODUCT_FIDELITY_INSTRUCTION =
   'Preserve the referenced product exactly: keep its identity, shape, proportions, ' +
   'color, visible material appearance, pattern, logo/text, structure, count and accessories unchanged.';
-
-const FREE_CREATIVE_INSTRUCTION =
-  'Create a high-quality ecommerce atmosphere hero image centered on the referenced product. ' +
-  'Freely decide the creative concept, environment, framing, camera perspective, lighting, styling, ' +
-  'spatial treatment and whether or how human presence is useful. Make the visual treatment fit this ' +
-  'specific product rather than a generic template.';
 
 /** ratio → V1 固定输出尺寸（单一映射函数，UI 不暴露原始 size） */
 export function heroSizeForRatio(ratio: string): string {
@@ -37,25 +32,14 @@ export function heroSizeForRatio(ratio: string): string {
   }
 }
 
-type HeroConcept = ProductIntelligenceRecord['plan']['heroConcepts'][number];
-
 export function buildHeroPrompt(
   request: CreateTaskRequest,
-  concept?: HeroConcept,
+  productDirection?: string,
 ): string {
   const opts = request.options as HeroTaskOptions;
   const parts: string[] = [PRODUCT_FIDELITY_INSTRUCTION];
-  if (opts.creativeMode === 'free') {
-    parts.push(FREE_CREATIVE_INSTRUCTION);
-  } else if (opts.creativeMode === 'concept') {
-    if (!concept) throw new Error('商品专属创意方向不存在，请重新分析商品');
-    parts.push(concept.prompt);
-  } else {
-    parts.push(
-      `Interpret and expand the following user intent creatively into an effective commercial hero image ` +
-        `while preserving the product exactly: ${opts.creativeIntent?.trim()}`,
-    );
-  }
+  if (!productDirection?.trim()) throw new Error('商品专属创意方向不存在，请重新分析商品');
+  parts.push(productDirection.trim());
   if (opts.humanPresence === 'none') {
     parts.push('Do not show any person, hand, body part, silhouette or human figure anywhere in the image.');
   } else if (opts.humanPresence === 'involved') {
@@ -65,6 +49,18 @@ export function buildHeroPrompt(
     );
   }
   return parts.join(' ');
+}
+
+function freshIntelligenceForSource(
+  intelligence: ProductIntelligenceRecord | null,
+  sourceAssetId: string,
+  assets: Awaited<ReturnType<typeof listAssets>>,
+): intelligence is ProductIntelligenceRecord {
+  return Boolean(
+    intelligence &&
+    isIntelligenceFresh(intelligence, assets) &&
+    intelligence.assetSnapshot.some((asset) => asset.id === sourceAssetId),
+  );
 }
 
 async function downloadImage(url: string): Promise<Buffer> {
@@ -89,7 +85,7 @@ export async function runHeroTask(
   const source = await assetFile(workspaceId, opts.sourceAssetId, 'original');
   if (!source) throw new Error('源商品图片不存在或已被删除');
 
-  let concept: HeroConcept | undefined;
+  let productDirection: string;
   if (opts.creativeMode === 'concept') {
     const intelligence = await getWorkspaceIntelligence(workspaceId);
     if (!intelligence) throw new Error('请先分析商品获取专属创意方向');
@@ -97,14 +93,44 @@ export async function runHeroTask(
     if (!isIntelligenceFresh(intelligence, assets)) {
       throw new Error('商品素材已变化，请重新分析后再使用商品专属方向');
     }
-    concept = intelligence.plan.heroConcepts.find((item) => item.id === opts.conceptId);
+    const concept = intelligence.plan.heroConcepts.find((item) => item.id === opts.conceptId);
     if (!concept) throw new Error('所选商品专属创意方向不存在，请重新选择');
+    productDirection = concept.prompt;
+  } else {
+    const assets = await listAssets(workspaceId);
+    const intelligence = await getWorkspaceIntelligence(workspaceId);
+    if (freshIntelligenceForSource(intelligence, opts.sourceAssetId, assets)) {
+      if (opts.creativeMode === 'free') {
+        productDirection = intelligence.plan.heroConcepts.find(
+          (concept) => concept.recommendedSourceAssetId === opts.sourceAssetId,
+        )?.prompt ?? intelligence.plan.heroConcepts[0].prompt;
+      } else {
+        productDirection = `Visible product understanding: ${intelligence.analysis.visualSummary} ` +
+          `User creative intent (preserve exactly): ${opts.creativeIntent!.trim()}`;
+      }
+    } else {
+      const workspace = await getWorkspace(workspaceId);
+      if (!workspace) throw new Error('商品工作区不存在');
+      const sourceAsset = assets.find((asset) => asset.id === opts.sourceAssetId);
+      if (!sourceAsset) throw new Error('源商品图片不存在或已被删除');
+      const plan = await (await createActiveVisionProvider()).planHero({
+        workspaceName: workspace.name,
+        asset: {
+          assetId: sourceAsset.id,
+          role: sourceAsset.role,
+          mimeType: 'image/jpeg',
+          buffer: await makeVisionPreview(source.buffer),
+        },
+        creativeIntent: opts.creativeMode === 'custom' ? opts.creativeIntent!.trim() : undefined,
+      });
+      productDirection = plan.prompt;
+    }
   }
 
   const provider = await createActiveImageProvider();
   const generated = await provider.generate({
     imagePath: source.filePath,
-    prompt: buildHeroPrompt(request, concept),
+    prompt: buildHeroPrompt(request, productDirection),
     ratio: opts.ratio,
     count: request.count,
   });

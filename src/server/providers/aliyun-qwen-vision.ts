@@ -1,6 +1,6 @@
-import { ProductIntelligencePayloadSchema } from '@/core/intelligence';
+import { HeroRuntimePlanSchema, ProductIntelligencePayloadSchema } from '@/core/intelligence';
 import type { ResolvedVisionConfig } from '@/server/settings/ai';
-import type { ProductIntelligenceInput, ProductIntelligenceProvider } from './vision-provider';
+import type { HeroPlanningInput, ProductIntelligenceInput, ProductIntelligenceProvider } from './vision-provider';
 import { invalidProviderResponse, providerFetchError, providerHttpError } from './provider-errors';
 
 export const SYSTEM_PROMPT = `You are an ecommerce product photographer and visual merchandising planner.
@@ -111,6 +111,46 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
     const raw = responseText(choices?.[0]?.message?.content).trim();
     if (!raw) throw invalidProviderResponse();
     try { return ProductIntelligencePayloadSchema.parse(JSON.parse(raw)); }
+    catch { throw invalidProviderResponse(); }
+  }
+
+  async planHero(input: HeroPlanningInput) {
+    const creativeIntent = input.creativeIntent
+      ? `\nUser creative intent (preserve it while adapting it to the visible product): ${input.creativeIntent}`
+      : '';
+    const planningInstruction = `Inspect the visible product in the supplied image before planning.\n` +
+      `Return exactly JSON: {"prompt":"..."}. The prompt must be English and propose one strongest product-specific ecommerce Hero direction.\n` +
+      `Preserve product identity, shape, proportions, color, visible material appearance, pattern, logo/text, structure, count, accessories and visible hardware.\n` +
+      `Do not invent unseen back/interior/accessories/functions or unsupported factual claims. Do not force a predefined scene, style or person taxonomy.\n` +
+      `Freely choose scene, camera, environment, lighting, spatial treatment and mood. Prioritize commercial usefulness, believable photography and low AI-looking output.` + creativeIntent;
+    let response: Response;
+    try {
+      response = await fetch(this.config.endpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.config.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.config.model,
+          messages: [{ role: 'user', content: [
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.asset.buffer.toString('base64')}` } },
+            { type: 'text', text: planningInstruction },
+          ] }],
+          response_format: { type: 'json_object' },
+          enable_thinking: false,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (error) { throw providerFetchError(error); }
+    if (!response.ok) {
+      console.error('[qwen vision] hero planning request failed', { status: response.status });
+      throw providerHttpError(response.status);
+    }
+    let body: unknown;
+    try { body = await response.json(); } catch { throw invalidProviderResponse(); }
+    const choices = (body as { choices?: Array<{ message?: { content?: unknown } }> })?.choices;
+    const raw = responseText(choices?.[0]?.message?.content).trim();
+    if (!raw) throw invalidProviderResponse();
+    try { return HeroRuntimePlanSchema.parse(JSON.parse(raw)); }
     catch { throw invalidProviderResponse(); }
   }
 }

@@ -6,17 +6,26 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { CreateTaskRequest } from '@/core/tasks';
 import type { ProductIntelligenceRecord } from '@/core/intelligence';
 
-const { generateMock, assetFileMock, listAssetsMock, intelligenceMock } = vi.hoisted(() => ({
+const { generateMock, planHeroMock, assetFileMock, listAssetsMock, intelligenceMock, workspaceMock, previewMock } = vi.hoisted(() => ({
   generateMock: vi.fn(),
+  planHeroMock: vi.fn(),
   assetFileMock: vi.fn(),
   listAssetsMock: vi.fn(),
   intelligenceMock: vi.fn(),
+  workspaceMock: vi.fn(),
+  previewMock: vi.fn(),
 }));
 vi.mock('@/server/assets/service', () => ({ assetFile: assetFileMock, listAssets: listAssetsMock }));
 vi.mock('@/server/intelligence/service', () => ({ getWorkspaceIntelligence: intelligenceMock }));
 vi.mock('@/server/providers/factory', () => ({
   createActiveImageProvider: async () => ({ generate: (...args: unknown[]) => generateMock(...args) }),
+  createActiveVisionProvider: async () => ({ planHero: (...args: unknown[]) => planHeroMock(...args) }),
 }));
+vi.mock('@/server/image/sharp', async (original) => ({
+  ...await original<typeof import('@/server/image/sharp')>(),
+  makeVisionPreview: (...args: unknown[]) => previewMock(...args),
+}));
+vi.mock('@/server/workspaces/service', () => ({ getWorkspace: workspaceMock }));
 
 import { buildHeroPrompt, heroSizeForRatio, runHeroTask } from './hero';
 
@@ -71,9 +80,9 @@ afterAll(async () => { delete process.env.RUNTIME_DIR; await fs.rm(root, { recur
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe('Hero 分层 prompt', () => {
-  it('free 模式开放创作且 auto 人物不追加限制', () => {
-    const prompt = buildHeroPrompt(request());
-    expect(prompt).toContain('Freely decide the creative concept');
+  it('free 模式消费商品专属方向且 auto 人物不追加限制', () => {
+    const prompt = buildHeroPrompt(request(), 'A product-specific atmosphere direction.');
+    expect(prompt).toContain('A product-specific atmosphere direction.');
     expect(prompt).toContain('Preserve the referenced product exactly');
     expect(prompt).not.toMatch(/Do not show any person|Include meaningful/);
     expect(prompt).not.toMatch(/Composition:|Lighting:|Scene:/);
@@ -82,7 +91,7 @@ describe('Hero 分层 prompt', () => {
   it('concept 直接消费开放 prompt，人物显式覆盖最后追加', () => {
     const prompt = buildHeroPrompt(request(1, {
       creativeMode: 'concept', conceptId: concept.id, humanPresence: 'none',
-    }), concept);
+    }), concept.prompt);
     expect(prompt).toContain(concept.prompt);
     expect(prompt.endsWith('Do not show any person, hand, body part, silhouette or human figure anywhere in the image.')).toBe(true);
   });
@@ -90,7 +99,7 @@ describe('Hero 分层 prompt', () => {
   it('custom 扩展开放意图，involved 不固定手部或全身形式', () => {
     const prompt = buildHeroPrompt(request(1, {
       creativeMode: 'custom', creativeIntent: '雨夜归家的一刻', humanPresence: 'involved',
-    }));
+    }), 'Visible product understanding: white cup. User creative intent (preserve exactly): 雨夜归家的一刻');
     expect(prompt).toContain('雨夜归家的一刻');
     expect(prompt).toContain('meaningful, natural human presence');
     expect(prompt).toContain('Choose the most appropriate');
@@ -118,15 +127,52 @@ describe('Hero 执行与新鲜分析要求', () => {
     }), 'task-stale')).rejects.toThrow(/重新分析/);
   });
 
-  it.each([
-    ['free', {}],
-    ['custom', { creativeMode: 'custom', creativeIntent: '极简但有张力' }],
-  ])('%s 模式不读取商品分析', async (_label, options) => {
+  it('free 在覆盖当前源图的新鲜分析中复用匹配概念，不再规划', async () => {
     assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
+    intelligenceMock.mockResolvedValue({ ...intelligence, plan: { ...intelligence.plan, heroConcepts: [{ ...concept, recommendedSourceAssetId: ASSET_ID }] } });
+    listAssetsMock.mockResolvedValue([asset]);
     generateMock.mockResolvedValue([{ url: 'https://cdn.example/1.png' }]);
     stubDownload();
-    await runHeroTask(workspaceId, request(1, options), cryptoId());
-    expect(intelligenceMock).not.toHaveBeenCalled();
+    await runHeroTask(workspaceId, request(), cryptoId());
+    expect(planHeroMock).not.toHaveBeenCalled();
+    expect(generateMock).toHaveBeenCalledWith(expect.objectContaining({ prompt: expect.stringContaining(concept.prompt) }));
+  });
+
+  it('free 没有可复用分析时先做 VLM planning，再调用生图', async () => {
+    assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
+    intelligenceMock.mockResolvedValue(null);
+    listAssetsMock.mockResolvedValue([asset]);
+    workspaceMock.mockResolvedValue({ name: '杯子' });
+    previewMock.mockResolvedValue(Buffer.from('preview'));
+    planHeroMock.mockResolvedValue({ prompt: 'A planned product-specific scene.' });
+    generateMock.mockResolvedValue([{ url: 'https://cdn.example/1.png' }]);
+    stubDownload();
+    await runHeroTask(workspaceId, request(), cryptoId());
+    expect(planHeroMock).toHaveBeenCalledWith(expect.objectContaining({ workspaceName: '杯子', creativeIntent: undefined }));
+    expect(generateMock).toHaveBeenCalledWith(expect.objectContaining({ prompt: expect.stringContaining('A planned product-specific scene.') }));
+  });
+
+  it('custom 在新鲜分析中保留原样用户创意而不再规划', async () => {
+    assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
+    intelligenceMock.mockResolvedValue(intelligence);
+    listAssetsMock.mockResolvedValue([asset]);
+    generateMock.mockResolvedValue([{ url: 'https://cdn.example/1.png' }]);
+    stubDownload();
+    await runHeroTask(workspaceId, request(1, { creativeMode: 'custom', creativeIntent: '极简但有张力' }), cryptoId());
+    expect(planHeroMock).not.toHaveBeenCalled();
+    expect(generateMock).toHaveBeenCalledWith(expect.objectContaining({ prompt: expect.stringContaining('极简但有张力') }));
+  });
+
+  it('custom 无可复用分析时向 VLM 传递原样用户创意；规划失败不会生图', async () => {
+    assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
+    intelligenceMock.mockResolvedValue(null);
+    listAssetsMock.mockResolvedValue([asset]);
+    workspaceMock.mockResolvedValue({ name: '杯子' });
+    previewMock.mockResolvedValue(Buffer.from('preview'));
+    planHeroMock.mockRejectedValue(new Error('planning failed'));
+    await expect(runHeroTask(workspaceId, request(1, { creativeMode: 'custom', creativeIntent: '雨夜归家' }), cryptoId())).rejects.toThrow('planning failed');
+    expect(planHeroMock).toHaveBeenCalledWith(expect.objectContaining({ creativeIntent: '雨夜归家' }));
+    expect(generateMock).not.toHaveBeenCalled();
   });
 
   it('concept 推荐源不会覆盖用户实际选择的源图', async () => {
@@ -144,6 +190,8 @@ describe('Hero 执行与新鲜分析要求', () => {
 
   it('完整结果只返回安全 URL，数量不足时整体失败', async () => {
     assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
+    intelligenceMock.mockResolvedValue(intelligence);
+    listAssetsMock.mockResolvedValue([asset]);
     generateMock.mockResolvedValue([{ url: 'https://cdn.example/1.png' }, { url: 'https://cdn.example/2.png' }]);
     stubDownload();
     const result = await runHeroTask(workspaceId, request(2), cryptoId());

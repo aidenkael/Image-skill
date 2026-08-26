@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 const { analyzeMock } = vi.hoisted(() => ({ analyzeMock: vi.fn() }));
 vi.mock('@/server/providers/factory', () => ({
-  createActiveVisionProvider: async () => ({ analyze: (...args: unknown[]) => analyzeMock(...args) }),
+  createActiveVisionProvider: async () => ({ analyze: (...args: unknown[]) => analyzeMock(...args), planHero: vi.fn() }),
 }));
 
 import { saveAsset, setAssetRole } from '@/server/assets/service';
