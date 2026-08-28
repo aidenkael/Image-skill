@@ -1,3 +1,0 @@
-# rembg 已移除：本技能不再做本地抠图合成。
-requests
-Pillow

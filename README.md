@@ -84,6 +84,9 @@ AI 配置仅保存在服务端已忽略的 `.runtime/settings/ai-profiles.json`�
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — 开发指南（产品定义 / 模块边界 / 契约 / 开发顺序）
 - `legacy/` — 旧 Agent+Skill 试验资料（历史参考，非运行时）
 
+> 本仓库仅维护 Image-skill V1 商品视觉工作台。Crystal 桌面技能（水晶手镯参考图）已从本仓库
+> 拆分为独立的本地项目 `E:\Crystal Image Skill`，目前仅本地管理，不进入本仓库与 GitHub。
+
 ## License
 
 MIT

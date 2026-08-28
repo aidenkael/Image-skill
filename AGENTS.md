@@ -3,6 +3,10 @@
 本文件约束所有参与 Image-skill V1 商品视觉工作台的 AI Agent 行为。
 V1 产品方向以本文为准；仓库内 `legacy/` 目录为历史研究资料，非运行时。
 
+> 仓库范围：本仓库**仅**维护 Image-skill V1 商品视觉工作台。Crystal 桌面技能
+> （水晶手镯参考图）已从本仓库拆分为**独立本地项目**（`E:\Crystal Image Skill`），
+> 仅本地管理，不进入本仓库 Git 历史或 GitHub。
+
 ## 产品定义
 
 - 产品：SHEIN 类电商商品视觉工作台（Web 应用）。

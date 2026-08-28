@@ -9,18 +9,9 @@
 *.tsbuildinfo
 
 # === Outputs & Generated Images ===
-# 仅限仓库根 outputs/（不伤及嵌套目录，如 crystal/tests/outputs/）
+# 仅限仓库根 outputs/（避免误伤其他嵌套目录）
 /outputs/
 !/outputs/.gitkeep
-
-# === Crystal runtime artifacts ===
-crystal/tests/outputs/*
-!crystal/tests/outputs/.gitkeep
-
-# === Crystal desktop packaging ===
-crystal/build/
-crystal/dist/
-crystal/*.spec
 
 # === Test Sample Images (supplier product photos) ===
 tests/samples/*.jpg
