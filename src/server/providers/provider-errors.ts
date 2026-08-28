@@ -25,6 +25,7 @@ export function providerFetchError(error: unknown): ProviderRequestError {
   return new ProviderRequestError('无法连接 AI 服务，请检查网络后重试。');
 }
 
-export function invalidProviderResponse(): ProviderRequestError {
-  return new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
+export function invalidProviderResponse(requestId?: string): ProviderRequestError {
+  const diagnostic = requestId ? `（诊断编号：${requestId.slice(0, 8)}）` : '';
+  return new ProviderRequestError(`AI 返回结果无法解析${diagnostic}，请重新尝试。`);
 }

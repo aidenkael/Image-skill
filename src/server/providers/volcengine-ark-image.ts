@@ -1,5 +1,7 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { writeAILog } from '@/server/logging/ai-log';
 import type { ResolvedImageConfig } from '@/server/settings/ai';
 import type { GeneratedImage, ImageGenerationInput, ImageProvider } from './image-provider';
 import { ProviderRequestError, providerFetchError, providerHttpError } from './provider-errors';
@@ -26,6 +28,14 @@ export class VolcengineArkImageProvider implements ImageProvider {
     const dataUri = `data:${mime};base64,${imageData.toString('base64')}`;
     const results: GeneratedImage[] = [];
     for (let index = 0; index < input.count; index += 1) {
+      const requestId = crypto.randomUUID();
+      const started = Date.now();
+      const log = (event: Omit<Parameters<typeof writeAILog>[0], 'requestId' | 'operation' | 'profileId' | 'driver' | 'provider' | 'model' | 'endpoint' | 'durationMs' | 'apiKey' | 'count' | 'ratio'>) => writeAILog({
+        ...event, requestId, operation: 'image.generation', profileId: this.config.profileId,
+        driver: this.config.driver, provider: 'volcengine-ark', model: this.config.model,
+        endpoint: this.config.endpoint, apiKey: this.config.apiKey, durationMs: Date.now() - started,
+        count: 1, ratio: input.ratio,
+      });
       let response: Response;
       try {
         response = await fetch(this.config.endpoint, {
@@ -43,17 +53,29 @@ export class VolcengineArkImageProvider implements ImageProvider {
           }),
           signal: AbortSignal.timeout(180_000),
         });
-      } catch (error) { throw providerFetchError(error); }
+      } catch (error) {
+        await log({ status: 'failed', failureStage: 'fetch', errorName: error instanceof Error ? error.name : undefined, errorMessage: error instanceof Error ? error.message : 'Unknown error' });
+        throw providerFetchError(error);
+      }
       if (!response.ok) {
-        console.error('[ark image] upstream request failed', { status: response.status });
+        const responseSnippet = await response.text();
+        await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet });
+        console.error(`[ai] image.generation failed requestId=${requestId.slice(0, 8)}`);
         throw providerHttpError(response.status);
       }
       let body: unknown;
-      try { body = await response.json(); } catch { throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。'); }
+      try { body = await response.json(); } catch {
+        await log({ status: 'failed', failureStage: 'response-json', httpStatus: response.status });
+        throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
+      }
       const urls = (body as { data?: Array<{ url?: unknown }> }).data
         ?.flatMap((item) => typeof item.url === 'string' && item.url ? [{ url: item.url }] : []) ?? [];
-      if (urls.length !== 1) throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
+      if (urls.length !== 1) {
+        await log({ status: 'failed', failureStage: 'content-extract', httpStatus: response.status });
+        throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
+      }
       results.push(urls[0]);
+      await log({ status: 'succeeded', httpStatus: response.status });
     }
     return results;
   }

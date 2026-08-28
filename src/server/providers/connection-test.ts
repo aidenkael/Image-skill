@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 import type { AIConnectionCapability } from '@/core/system';
+import { writeAILog } from '@/server/logging/ai-log';
 import {
   AISettingsValidationError,
   resolveProfileImageConfig,
@@ -53,32 +54,45 @@ export async function testProfileConnection(
   profileId: string,
   capability: AIConnectionCapability,
 ): Promise<string> {
+  const requestId = crypto.randomUUID();
+  const started = Date.now();
+  const operation = capability === 'vision' ? 'vision.connection-test' : 'image.connection-test';
   let config;
   try {
     config = capability === 'vision'
       ? await resolveProfileVisionConfig(profileId)
       : await resolveProfileImageConfig(profileId);
   } catch (error) {
+    await writeAILog({ requestId, operation, profileId, status: 'failed', durationMs: Date.now() - started,
+      failureStage: 'config', errorName: error instanceof Error ? error.name : undefined,
+      errorMessage: error instanceof Error ? error.message : 'Unknown error' });
     if (error instanceof AISettingsValidationError) throw error;
     throw new AIConnectionTestError('连接失败');
   }
-  if (capability !== 'vision') {
-    let response: Response;
-    try {
+  const log = (event: Omit<Parameters<typeof writeAILog>[0], 'requestId' | 'operation' | 'profileId' | 'driver' | 'model' | 'endpoint' | 'durationMs' | 'apiKey'>) => writeAILog({
+    ...event, requestId, operation, profileId, driver: config.driver, provider: config.driver,
+    model: config.model, endpoint: config.endpoint, apiKey: config.apiKey, durationMs: Date.now() - started,
+  });
+  let response: Response | undefined;
+  try {
+    if (capability !== 'vision') {
       response = await fetch(config.endpoint, {
         method: 'POST', headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: config.model }), signal: AbortSignal.timeout(30_000),
       });
-    } catch { throw new AIConnectionTestError('接口地址不可用'); }
-    let body: unknown = null;
-    try { body = await response.json(); } catch { /* status is sufficient */ }
-    if (response.status === 400 && /(missing|required).*(message|prompt|image|input)|(message|prompt|image|input).*(missing|required)/.test(errorText(body))) return '连接成功';
-    if (response.ok) return '连接成功';
-    return classifyFailure(response.status, body);
-  }
-  const probe = await visionProbe(profileId);
-  let response: Response;
-  try {
+      let body: unknown = null;
+      try { body = await response.json(); } catch { /* status is sufficient */ }
+      if (response.status === 400 && /(missing|required).*(message|prompt|image|input)|(message|prompt|image|input).*(missing|required)/.test(errorText(body))) {
+        await log({ status: 'succeeded', httpStatus: response.status });
+        return '连接成功';
+      }
+      if (response.ok) {
+        await log({ status: 'succeeded', httpStatus: response.status });
+        return '连接成功';
+      }
+      return classifyFailure(response.status, body);
+    }
+    const probe = await visionProbe(profileId);
     response = await fetch(config.endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
@@ -93,13 +107,20 @@ export async function testProfileConnection(
       }),
       signal: AbortSignal.timeout(30_000),
     });
-  } catch { throw new AIConnectionTestError('接口地址不可用'); }
-  let body: unknown = null;
-  try { body = await response.json(); } catch { /* status is sufficient */ }
-  if (!response.ok) return classifyFailure(response.status, body);
-  const content = (body as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]?.message?.content;
-  if (responseText(content).trim().toUpperCase() !== probe.color) {
-    throw new AIConnectionTestError('模型未通过识图测试');
+    let body: unknown = null;
+    try { body = await response.json(); } catch { /* status is sufficient */ }
+    if (!response.ok) return classifyFailure(response.status, body);
+    const content = (body as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]?.message?.content;
+    if (responseText(content).trim().toUpperCase() !== probe.color) {
+      throw new AIConnectionTestError('模型未通过识图测试');
+    }
+    await log({ status: 'succeeded', httpStatus: response.status });
+    return '连接成功';
+  } catch (error) {
+    await log({ status: 'failed', httpStatus: response?.status, failureStage: response ? 'http' : 'fetch',
+      errorName: error instanceof Error ? error.name : undefined,
+      errorMessage: error instanceof Error ? error.message : 'Unknown error' });
+    if (!response) throw new AIConnectionTestError('接口地址不可用');
+    throw error;
   }
-  return '连接成功';
 }

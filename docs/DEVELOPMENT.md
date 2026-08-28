@@ -106,6 +106,7 @@ templates/
 - Collage 服务端不调用 AI；Optimize 仅调用 Sharp。
 - hero 结果数量必须等于请求数量，否则任务整体失败。
 - AI Profile 以 `.runtime/settings/ai-profiles.json` 为唯一运行时事实源；旧 Key/环境变量只在文件不存在时迁移一次。完整 Key 不进入浏览器存储或响应，端点不根据 Key 前缀推断。
+- AI 诊断日志：`.runtime/logs/ai-YYYY-MM-DD.jsonl`（仅本地运行时文件；排查时先确认其中不含敏感信息后再提供）。
 
 ## 8. V1 开发顺序
 

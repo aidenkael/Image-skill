@@ -9,11 +9,13 @@ export interface VisionAssetInput {
 }
 
 export interface ProductIntelligenceInput {
+  workspaceId: string;
   workspaceName: string;
   assets: VisionAssetInput[];
 }
 
 export interface HeroPlanningInput {
+  workspaceId: string;
   workspaceName: string;
   asset: VisionAssetInput;
   creativeIntent?: string;

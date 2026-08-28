@@ -114,6 +114,7 @@ export async function runHeroTask(
       const sourceAsset = assets.find((asset) => asset.id === opts.sourceAssetId);
       if (!sourceAsset) throw new Error('源商品图片不存在或已被删除');
       const plan = await (await createActiveVisionProvider()).planHero({
+        workspaceId,
         workspaceName: workspace.name,
         asset: {
           assetId: sourceAsset.id,

@@ -191,6 +191,7 @@ export async function analyzeWorkspace(
 
     const provider = await createActiveVisionProvider();
     const rawPayload = await provider.analyze({
+      workspaceId,
       workspaceName: workspace.name,
       assets: providerInputs,
     });
