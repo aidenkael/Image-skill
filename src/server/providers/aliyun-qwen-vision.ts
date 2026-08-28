@@ -123,6 +123,19 @@ function zodIssues(error: unknown): Array<{ path: string; code: string; message:
 type LogDetail = Omit<Parameters<typeof writeAILog>[0],
   'requestId' | 'operation' | 'workspaceId' | 'profileId' | 'driver' | 'provider' | 'model' | 'endpoint' | 'durationMs' | 'apiKey' | 'timestamp' | 'assetCount' | 'assetIds'>;
 
+function normalizeStructuredPayload<T extends z.ZodType>(parsed: unknown, schema: T):
+  | { success: true; data: z.output<T>; normalization?: 'single-item-array-unwrapped' }
+  | { success: false; error: z.ZodError } {
+  const direct = schema.safeParse(parsed);
+  if (direct.success) return direct;
+  if (!Array.isArray(parsed) || parsed.length !== 1 || parsed[0] === null || typeof parsed[0] !== 'object' || Array.isArray(parsed[0])) {
+    return { success: false, error: direct.error };
+  }
+  const unwrapped = schema.safeParse(parsed[0]);
+  if (!unwrapped.success) return { success: false, error: unwrapped.error };
+  return { success: true, data: unwrapped.data, normalization: 'single-item-array-unwrapped' };
+}
+
 export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
   constructor(private readonly config: ResolvedVisionConfig) {}
 
@@ -230,13 +243,12 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
       await log({ status: 'failed', failureStage: 'content-json-parse', httpStatus: response.status, usage: responseUsage(body), responseSnippet: raw });
       throw invalidProviderResponse(requestId);
     }
-    try {
-      const result = options.schema.parse(parsed);
-      await log({ status: 'succeeded', httpStatus: response.status, usage: responseUsage(body) });
-      return result;
-    } catch (error) {
-      await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: responseUsage(body), responseSnippet: raw, zodIssues: zodIssues(error) });
-      throw invalidProviderResponse(requestId);
+    const normalized = normalizeStructuredPayload(parsed, options.schema);
+    if (normalized.success) {
+      await log({ status: 'succeeded', httpStatus: response.status, usage: responseUsage(body), normalization: normalized.normalization });
+      return normalized.data;
     }
+    await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: responseUsage(body), responseSnippet: raw, zodIssues: zodIssues(normalized.error) });
+    throw invalidProviderResponse(requestId);
   }
 }

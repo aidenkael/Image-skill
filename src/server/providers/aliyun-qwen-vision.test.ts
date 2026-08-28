@@ -31,6 +31,11 @@ function responseBody() {
   return () => captured;
 }
 
+async function lastLog(): Promise<Record<string, unknown>> {
+  const file = path.join(root, '.runtime', 'logs', `ai-${new Date().toISOString().slice(0, 10)}.jsonl`);
+  return JSON.parse((await fs.readFile(file, 'utf8')).trim().split('\n').at(-1)!);
+}
+
 describe('OpenAI 兼容识图 Provider', () => {
   it('Qwen3.7-Plus 使用严格 JSON Schema，其他模型保留兼容模式', async () => {
     expect(supportsStrictJsonSchema('qwen3.7-plus')).toBe(true);
@@ -55,6 +60,7 @@ describe('OpenAI 兼容识图 Provider', () => {
     const getCustom = responseBody();
     await new AliyunQwenVisionProvider(customConfig).analyze(analysisInput());
     expect(getCustom().response_format).toEqual({ type: 'json_object' });
+    expect((await lastLog()).normalization).toBeUndefined();
   });
 
   it('参考图可进入分析但不能作为严格 Hero 源', () => {
@@ -80,6 +86,35 @@ describe('OpenAI 兼容识图 Provider', () => {
     expect(captured.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: true, schema: { required: ['prompt'], additionalProperties: false } } });
   });
 
+  it('单元素 Product Intelligence 数组仅在完整通过 Zod 后解包并记录归一化', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: JSON.stringify([payload]) } }] })));
+    await expect(new AliyunQwenVisionProvider(strictConfig).analyze(analysisInput())).resolves.toEqual(payload);
+    await expect(lastLog()).resolves.toMatchObject({ status: 'succeeded', normalization: 'single-item-array-unwrapped' });
+  });
+
+  it('Hero planning 同样兼容单元素对象数组', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: JSON.stringify([{ prompt: 'A natural product hero scene.' }]) } }] })));
+    await expect(new AliyunQwenVisionProvider(strictConfig).planHero(heroInput())).resolves.toEqual({ prompt: 'A natural product hero scene.' });
+    await expect(lastLog()).resolves.toMatchObject({ operation: 'vision.hero-planning', normalization: 'single-item-array-unwrapped' });
+  });
+
+  it.each([
+    ['空数组', []],
+    ['多元素数组', [payload, payload]],
+    ['字符串数组项', ['invalid']],
+  ])('%s 不会被兼容', async (_name, invalid) => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: JSON.stringify(invalid) } }] })));
+    await expect(new AliyunQwenVisionProvider(strictConfig).analyze(analysisInput())).rejects.toThrow(/AI 返回结果无法解析/);
+    await expect(lastLog()).resolves.toMatchObject({ failureStage: 'schema-validate' });
+  });
+
+  it('单元素无效对象仍失败，且记录内层 Zod issues', async () => {
+    const invalid = { ...payload, analysis: { ...payload.analysis, category: '' } };
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: JSON.stringify([invalid]) } }] })));
+    await expect(new AliyunQwenVisionProvider(strictConfig).analyze(analysisInput())).rejects.toThrow(/AI 返回结果无法解析/);
+    await expect(lastLog()).resolves.toMatchObject({ failureStage: 'schema-validate', zodIssues: [expect.objectContaining({ path: 'analysis.category' })] });
+  });
+
   it.each([
     ['response-json', () => new Response('not json')],
     ['content-extract', () => Response.json({ choices: [{ message: {} }] })],
@@ -88,8 +123,7 @@ describe('OpenAI 兼容识图 Provider', () => {
   ])('记录 %s 且 UI 仅获得诊断编号', async (stage, response) => {
     vi.stubGlobal('fetch', vi.fn(async () => response()));
     await expect(new AliyunQwenVisionProvider(strictConfig).analyze(analysisInput())).rejects.toThrow(/AI 返回结果无法解析（诊断编号：[0-9a-f]{8}）/);
-    const file = path.join(root, '.runtime', 'logs', `ai-${new Date().toISOString().slice(0, 10)}.jsonl`);
-    const event = JSON.parse((await fs.readFile(file, 'utf8')).trim().split('\n').at(-1)!);
+    const event = await lastLog();
     expect(event.failureStage).toBe(stage);
     if (stage === 'schema-validate') expect(event.zodIssues).toEqual(expect.any(Array));
   });

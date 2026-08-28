@@ -24,6 +24,7 @@ export interface AILogEvent {
   assetIds?: string[];
   count?: number;
   ratio?: string;
+  normalization?: 'single-item-array-unwrapped';
   apiKey?: string;
 }
 
