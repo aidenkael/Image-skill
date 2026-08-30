@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AssetRef } from '@/core/assets';
-import type { TaskRecord } from '@/core/tasks';
+import type { HeroTaskOptions, TaskRecord } from '@/core/tasks';
 import type { TemplateDocument } from '@/core/templates';
 import { DEFAULT_WORKSPACE_DRAFT, WorkspaceDraftSchema } from '@/core/workspaces';
 import {
+  heroPlanInputChanged,
   heroRunStatePatch,
   removeAssetFromCollageVariants,
   replaceActiveCollageVariantInList,
@@ -268,5 +269,44 @@ describe('heroRunStatePatch：最新 Hero 任务状态一致性', () => {
     const failed = heroTask(FAILED_ID, 'failed', { error: 'boom' });
     expect(heroRunStatePatch(WS_B, WS_A, failed, [failed])).toBeNull();
     expect(heroRunStatePatch(null, WS_A, failed, [failed])).toBeNull();
+  });
+});
+
+describe('heroPlanInputChanged：Hero 策划输入变化检测', () => {
+  const baseOptions: HeroTaskOptions = {
+    sourceAssetId: 'asset-1',
+    ratio: '1:1',
+    creativeMode: 'recommended',
+    humanPresence: 'auto',
+    creativeLevel: 'balanced',
+  };
+
+  it('真正修改策划输入 => 返回 true（方案失效）', () => {
+    expect(heroPlanInputChanged(baseOptions, { ratio: '3:4' })).toBe(true);
+    expect(heroPlanInputChanged(baseOptions, { sourceAssetId: 'asset-2' })).toBe(true);
+    expect(heroPlanInputChanged(baseOptions, { creativeMode: 'custom' })).toBe(true);
+    expect(heroPlanInputChanged(baseOptions, { humanPresence: 'require' })).toBe(true);
+    expect(heroPlanInputChanged(baseOptions, { creativeLevel: 'creative' })).toBe(true);
+    expect(heroPlanInputChanged(baseOptions, { creativeIntent: '新想法' })).toBe(true);
+  });
+
+  it('相同值重复 patch => 返回 false（方案不失效）', () => {
+    expect(heroPlanInputChanged(baseOptions, { ratio: '1:1' })).toBe(false);
+    expect(heroPlanInputChanged(baseOptions, { sourceAssetId: 'asset-1' })).toBe(false);
+    expect(heroPlanInputChanged(baseOptions, { creativeMode: 'recommended' })).toBe(false);
+    expect(heroPlanInputChanged(baseOptions, { humanPresence: 'auto' })).toBe(false);
+    expect(heroPlanInputChanged(baseOptions, { creativeLevel: 'balanced' })).toBe(false);
+  });
+
+  it('仅修改 planId => 不触发失效（planId 不是策划输入）', () => {
+    expect(heroPlanInputChanged(baseOptions, { planId: 'some-uuid' })).toBe(false);
+  });
+
+  it('混合 patch：策划输入变化 + planId => 仍然失效', () => {
+    expect(heroPlanInputChanged(baseOptions, { ratio: '3:4', planId: 'some-uuid' })).toBe(true);
+  });
+
+  it('非 Hero source 素材的 patch（不包含策划输入键） => 不失效', () => {
+    expect(heroPlanInputChanged(baseOptions, {})).toBe(false);
   });
 });

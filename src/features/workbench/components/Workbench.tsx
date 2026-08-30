@@ -250,7 +250,8 @@ export function Workbench() {
                 assets={wb.assets}
                 count={wb.heroCount}
                 busy={wb.heroBusy}
-                aiConfigured={Boolean(aiSettings.settings?.activeImageProfileId)}
+                visionConfigured={Boolean(aiSettings.settings?.activeVisionProfileId)}
+                imageConfigured={Boolean(aiSettings.settings?.activeImageProfileId)}
                 heroPlan={wb.heroPlan}
                 planLoading={wb.heroPlanLoading}
                 onChange={wb.patchHeroOptions}

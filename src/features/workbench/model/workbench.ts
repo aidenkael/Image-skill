@@ -80,6 +80,30 @@ function toHeroTaskOptions(draft: { planId?: string | null; [key: string]: unkno
   return { ...rest, ...(planId ? { planId } : {}) } as HeroTaskOptions;
 }
 
+const HERO_PLAN_INPUT_KEYS = [
+  'sourceAssetId',
+  'ratio',
+  'creativeMode',
+  'creativeIntent',
+  'humanPresence',
+  'creativeLevel',
+] as const;
+
+/**
+ * 判定 Hero 策划输入是否真正发生变化。
+ * 相同值重复 patch => 不失效；真正修改策划输入 => 必须立即失效。
+ */
+export function heroPlanInputChanged(
+  current: HeroTaskOptions,
+  patch: Partial<HeroTaskOptions>,
+): boolean {
+  return HERO_PLAN_INPUT_KEYS.some(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(patch, key) &&
+      patch[key] !== current[key],
+  );
+}
+
 export class OrderedDraftWriter {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private latest: WorkspaceDraft | null = null;
@@ -429,14 +453,24 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     try {
       const nextAssets = await patchAssetRole(currentWorkspaceId, id, role);
       if (activeWorkspaceRef.current !== currentWorkspaceId) return null;
+      const previousRole = assetsRef.current.find((asset) => asset.id === id)?.role;
       assetsRef.current = nextAssets;
       setAssets(nextAssets);
       const updated = nextAssets.find((asset) => asset.id === id) ?? null;
       if (!updated) return null;
-      setHeroOptionsState((current) => ({
-        ...current,
-        sourceAssetId: sourceIdAfterRoleChange(current.sourceAssetId, id, updated.role),
-      }));
+      setHeroOptionsState((current) => {
+        const next = { ...current };
+        const newSourceId = sourceIdAfterRoleChange(current.sourceAssetId, id, updated.role);
+        if (newSourceId !== current.sourceAssetId) {
+          next.sourceAssetId = newSourceId;
+        }
+        // role 实际变化 => 当前 HeroPlan 立即失效
+        if (updated.role !== previousRole) {
+          delete next.planId;
+          setHeroPlan(null);
+        }
+        return next;
+      });
       setOptimizeOptionsState((current) => ({
         ...current,
         sourceAssetId: sourceIdAfterRoleChange(current.sourceAssetId, id, updated.role),
@@ -462,10 +496,16 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
       assetsRef.current = nextAssets;
       setAssets(nextAssets);
       setSelectedAssetIds((current) => current.filter((item) => item !== id));
-      setHeroOptionsState((current) => ({
-        ...current,
-        sourceAssetId: current.sourceAssetId === id ? '' : current.sourceAssetId,
-      }));
+      setHeroOptionsState((current) => {
+        const next = { ...current };
+        if (current.sourceAssetId === id) {
+          next.sourceAssetId = '';
+          // Hero source 被删除 => plan 立即失效
+          delete next.planId;
+          setHeroPlan(null);
+        }
+        return next;
+      });
       setOptimizeOptionsState((current) => ({
         ...current,
         sourceAssetId: current.sourceAssetId === id ? '' : current.sourceAssetId,
@@ -488,7 +528,16 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setError(null);
     setNotice(null);
   }, []);
-  const patchHeroOptions = useCallback((patch: Partial<HeroTaskOptions>) => setHeroOptionsState((current) => ({ ...current, ...patch })), []);
+  const patchHeroOptions = useCallback((patch: Partial<HeroTaskOptions>) => {
+    setHeroOptionsState((current) => {
+      const next = { ...current, ...patch };
+      if (heroPlanInputChanged(current, patch)) {
+        delete next.planId;
+        setHeroPlan(null);
+      }
+      return next;
+    });
+  }, []);
   const patchCollageOptions = useCallback((patch: Partial<CollageTaskOptions>) => setCollageOptionsState((current) => ({ ...current, ...patch })), []);
   const patchOptimizeOptions = useCallback((patch: Partial<OptimizeTaskOptions>) => setOptimizeOptionsState((current) => ({ ...current, ...patch })), []);
   const setCollageVariants = useCallback((variants: TemplateDocument[]) => setCollageVariantsState(sanitizeCollageVariants(variants, assetsRef.current)), []);

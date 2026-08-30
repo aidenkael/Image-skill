@@ -11,7 +11,8 @@ interface HeroControlsProps {
   assets: AssetRef[];
   count: number;
   busy: boolean;
-  aiConfigured: boolean;
+  visionConfigured: boolean;
+  imageConfigured: boolean;
   heroPlan: HeroPlanRecord | null;
   planLoading: boolean;
   onChange(patch: Partial<HeroTaskOptions>): void;
@@ -31,7 +32,8 @@ export function HeroControls({
   assets,
   count,
   busy,
-  aiConfigured,
+  visionConfigured,
+  imageConfigured,
   heroPlan,
   planLoading,
   onChange,
@@ -41,21 +43,19 @@ export function HeroControls({
 }: HeroControlsProps) {
   const sourceAsset = assets.find((asset) => asset.id === options.sourceAssetId);
   const hasPlan = heroPlan !== null && heroPlan.id === options.planId;
-  const blocker = busy
+  const generateBlocker = busy
     ? '当前商品的氛围主图正在生成，请等待完成。'
     : !sourceAsset
       ? '请明确选择一张非参考源商品图。'
-      : options.creativeMode === 'custom' && !options.creativeIntent?.trim()
-        ? '请填写你的创作想法。'
-        : !aiConfigured
-          ? '请先在 AI 设置中选择氛围主图配置'
-          : null;
+      : !imageConfigured
+        ? '请先在 AI 设置中选择氛围主图生成模型'
+        : null;
   const planBlocker = !sourceAsset
     ? '请先选择源商品图'
     : options.creativeMode === 'custom' && !options.creativeIntent?.trim()
       ? '请先填写创作想法'
-      : !aiConfigured
-        ? '请先配置 AI'
+      : !visionConfigured
+        ? '请先在 AI 设置中选择商品分析/视觉模型'
         : null;
 
   return (
@@ -66,7 +66,7 @@ export function HeroControls({
           id="hero-source-asset"
           className="input"
           value={options.sourceAssetId}
-          onChange={(event) => onChange({ sourceAssetId: event.target.value, planId: undefined })}
+          onChange={(event) => onChange({ sourceAssetId: event.target.value })}
         >
           <option value="">请选择源商品图</option>
           {assets.filter((asset) => asset.role !== 'reference').map((asset) => (
@@ -84,8 +84,8 @@ export function HeroControls({
       <div className="field">
         <label className="field-label">创作方式</label>
         <div className="seg">
-          <button type="button" className={`seg-btn${options.creativeMode === 'recommended' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'recommended', planId: undefined })}>AI 推荐方案</button>
-          <button type="button" className={`seg-btn${options.creativeMode === 'custom' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'custom', planId: undefined })}>自定义想法</button>
+          <button type="button" className={`seg-btn${options.creativeMode === 'recommended' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'recommended' })}>AI 推荐方案</button>
+          <button type="button" className={`seg-btn${options.creativeMode === 'custom' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'custom' })}>自定义想法</button>
         </div>
         {options.creativeMode === 'recommended' ? (
           <div className="hint">AI 像商业摄影师一样为商品策划氛围主图：锁定商品身份，自由发挥展示方式。</div>
@@ -96,7 +96,7 @@ export function HeroControls({
             placeholder="写下你希望画面传达的感觉、故事或任何创意要求"
             value={options.creativeIntent ?? ''}
             maxLength={500}
-            onChange={(event) => onChange({ creativeIntent: event.target.value, planId: undefined })}
+            onChange={(event) => onChange({ creativeIntent: event.target.value })}
           />
         ) : null}
       </div>
@@ -109,7 +109,7 @@ export function HeroControls({
             ['avoid', '不要人物'],
             ['require', '需要人物'],
           ] as const).map(([value, label]) => (
-            <button key={value} type="button" className={`seg-btn${options.humanPresence === value ? ' is-active' : ''}`} onClick={() => onChange({ humanPresence: value, planId: undefined })}>{label}</button>
+            <button key={value} type="button" className={`seg-btn${options.humanPresence === value ? ' is-active' : ''}`} onClick={() => onChange({ humanPresence: value })}>{label}</button>
           ))}
         </div>
         <div className="hint">
@@ -129,7 +129,7 @@ export function HeroControls({
             ['balanced', '平衡'],
             ['creative', '创意'],
           ] as const).map(([value, label]) => (
-            <button key={value} type="button" className={`seg-btn${options.creativeLevel === value ? ' is-active' : ''}`} onClick={() => onChange({ creativeLevel: value, planId: undefined })}>{label}</button>
+            <button key={value} type="button" className={`seg-btn${options.creativeLevel === value ? ' is-active' : ''}`} onClick={() => onChange({ creativeLevel: value })}>{label}</button>
           ))}
         </div>
         <div className="hint">
@@ -142,7 +142,7 @@ export function HeroControls({
       </div>
 
       <Choice label="输出数量" current={String(count)} values={['1', '2', '3', '4']} onSelect={(value) => onCountChange(Number(value))} />
-      <Choice label="画面比例" current={options.ratio} values={['1:1', '3:4', '4:3']} labels={['1:1 方形', '3:4 竖版', '4:3 横版']} onSelect={(value) => onChange({ ratio: value as HeroTaskOptions['ratio'], planId: undefined })} />
+      <Choice label="画面比例" current={options.ratio} values={['1:1', '3:4', '4:3']} labels={['1:1 方形', '3:4 竖版', '4:3 横版']} onSelect={(value) => onChange({ ratio: value as HeroTaskOptions['ratio'] })} />
 
       <div className="controls-actions">
         <button
@@ -174,13 +174,13 @@ export function HeroControls({
         <button
           type="button"
           className="btn btn-primary"
-          disabled={Boolean(blocker) || !hasPlan}
+          disabled={Boolean(generateBlocker) || !hasPlan}
           onClick={onGenerate}
         >
           {busy ? '生成中…' : '按此方案生成氛围主图'}
         </button>
-        {blocker ? <div className="hint blocker-hint">{blocker}</div> : null}
-        {!hasPlan && !blocker ? <div className="hint blocker-hint">请先生成 AI 方案</div> : null}
+        {generateBlocker ? <div className="hint blocker-hint">{generateBlocker}</div> : null}
+        {!hasPlan && !generateBlocker ? <div className="hint blocker-hint">请先生成 AI 方案</div> : null}
       </div>
     </div>
   );
