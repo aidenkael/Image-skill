@@ -109,13 +109,27 @@ function defaultImageCompatibilityForDriver(
       referenceImage: true, batchMode: 'single', sizeMode: 'mapped',
       sizeByRatio: { '1:1': '2048x2048', '3:4': '1536x2048', '4:3': '2048x1536' },
       promptEnhancement: 'off',
+      promptEnhancementSupported: false,
+      maxReferenceImages: 0,
     };
   }
   // dashscope-image (migrated from dashscope-qwen-image)
+  if (preset === 'aliyun-qwen') {
+    return {
+      referenceImage: true, batchMode: 'native', sizeMode: 'mapped',
+      sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' },
+      promptEnhancement: 'auto',
+      promptEnhancementSupported: true,
+      maxReferenceImages: 2,
+    };
+  }
+  // 旧 custom/dashscope 配置采用保守兼容值
   return {
     referenceImage: true, batchMode: 'native', sizeMode: 'mapped',
     sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' },
     promptEnhancement: 'auto',
+    promptEnhancementSupported: false,
+    maxReferenceImages: 0,
   };
 }
 

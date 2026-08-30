@@ -99,6 +99,7 @@ function unavailableRun(scenario: BenchmarkScenario, lane: BenchmarkLane, reason
     status: 'unavailable',
     statusReason: reason.slice(0, 500),
     usedEditRegions: false,
+    usedReferenceCount: 0,
     passCount: 0,
     failCount: 0,
     candidates: [],
@@ -110,7 +111,7 @@ function errorRun(scenario: BenchmarkScenario, lane: BenchmarkLane, reason: stri
   return { ...unavailableRun(scenario, lane, reason), status: 'error' };
 }
 
-/** lane → 生图配置：优先用户在 Lab 中指定，其次活动配置，再次首个兼容配置。 */
+/** lane → 生图配置：Benchmark 具名 lane 必须显式指定 laneProfileId，不自动 fallback。 */
 function resolveLaneProfileId(
   lane: BenchmarkLane,
   laneProfileIds: RunBenchmarkInput['laneProfileIds'],
@@ -118,23 +119,16 @@ function resolveLaneProfileId(
 ): { profileId?: string; reason?: string } {
   const preset = getLanePreset(lane);
   const requested = laneProfileIds?.[lane];
-  if (requested) {
-    const profile = settings.profiles.find((item) => item.id === requested);
-    if (!profile) return { reason: `lane ${lane} 选择的生图配置不存在` };
-    if (!profile.image.enabled) return { reason: `lane ${lane} 选择的生图配置未启用生图能力` };
-    if (profile.image.driver !== preset.driverTarget) {
-      return { reason: `lane ${lane} 选择的配置驱动（${profile.image.driver}）与路线要求（${preset.driverTarget}）不匹配` };
-    }
-    return { profileId: requested };
+  if (!requested) {
+    return { reason: `lane ${lane} 未显式选择生图配置，该路线不可用。` };
   }
-  const compatible = settings.profiles.filter(
-    (item) => item.image.enabled && item.image.driver === preset.driverTarget,
-  );
-  if (compatible.length === 0) {
-    return { reason: `未找到驱动 ${preset.driverTarget} 的可用生图配置，请先在 AI 设置中添加` };
+  const profile = settings.profiles.find((item) => item.id === requested);
+  if (!profile) return { reason: `lane ${lane} 选择的生图配置不存在` };
+  if (!profile.image.enabled) return { reason: `lane ${lane} 选择的生图配置未启用生图能力` };
+  if (profile.image.driver !== preset.driverTarget) {
+    return { reason: `lane ${lane} 选择的配置驱动（${profile.image.driver}）与路线要求（${preset.driverTarget}）不匹配` };
   }
-  const active = compatible.find((item) => item.id === settings.activeImageProfileId);
-  return { profileId: (active ?? compatible[0]).id };
+  return { profileId: requested };
 }
 
 async function saveCandidate(
@@ -189,6 +183,11 @@ async function executeLaneRun(options: {
   if (capabilityIssue) return unavailableRun(scenario, lane, capabilityIssue);
   const usedEditRegions = laneEditRegionsEnabled(preset, capabilities);
 
+  // Reference Pack 截断：按 provider 真实 maxReferenceImages 截取前 N 张
+  const usedRefs = preset.useReferencePack
+    ? pack.crops.slice(0, capabilities.maxReferenceImages)
+    : [];
+
   const outDir = await ensureDir('benchmark-lab', runId, scenario, lane);
   try {
     const generated = await provider.generate({
@@ -196,8 +195,8 @@ async function executeLaneRun(options: {
       prompt: options.prompt,
       ratio: options.ratio,
       count: BENCHMARK_CANDIDATES_PER_RUN,
-      ...(preset.useReferencePack && pack.crops.length > 0
-        ? { referenceImagePaths: pack.crops.map((item) => item.path) }
+      ...(usedRefs.length > 0
+        ? { referenceImagePaths: usedRefs.map((item) => item.path) }
         : {}),
       promptEnhancement: preset.promptEnhancement,
       ...(usedEditRegions
@@ -253,6 +252,7 @@ async function executeLaneRun(options: {
       status: 'completed',
       statusReason: null,
       usedEditRegions,
+      usedReferenceCount: usedRefs.length,
       passCount,
       failCount: candidateRecords.length - passCount,
       candidates: candidateRecords,

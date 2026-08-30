@@ -24,13 +24,13 @@ import {
  * 输入面板 + Reference Pack 预览 + 结果矩阵 + 聚合摘要；不改动正式工作台。
  */
 
-/** lane → 驱动目标（与 server/benchmark-lab/lanes.ts 预设一致；features 不得 import server，故此处维护展示用映射） */
-const LANE_DRIVER_TARGETS: Record<BenchmarkLane, 'dashscope-image' | 'volcengine-ark-image'> = {
-  'qwen-single-extend-on': 'dashscope-image',
-  'qwen-single-extend-off': 'dashscope-image',
-  'qwen-multi-ref': 'dashscope-image',
-  'seedream-multi-ref': 'volcengine-ark-image',
-  'wan-multi-ref': 'dashscope-image',
+/** lane 分组：Qwen 路线、Wan 路线、Seedream 路线分别独立选择配置。 */
+const LANE_PROFILE_GROUP: Record<BenchmarkLane, 'qwen' | 'wan' | 'seedream'> = {
+  'qwen-single-extend-on': 'qwen',
+  'qwen-single-extend-off': 'qwen',
+  'qwen-multi-ref': 'qwen',
+  'wan-multi-ref': 'wan',
+  'seedream-multi-ref': 'seedream',
 };
 
 const styles = {
@@ -67,7 +67,8 @@ export function BenchmarkLab() {
   const [lanes, setLanes] = useState<BenchmarkLane[]>([...ALL_BENCHMARK_LANES]);
   const [settings, setSettings] = useState<AISettingsPublic | null>(null);
   const [visionProfileId, setVisionProfileId] = useState<string | null>(null);
-  const [dashscopeProfileId, setDashscopeProfileId] = useState<string>('');
+  const [qwenProfileId, setQwenProfileId] = useState<string>('');
+  const [wanProfileId, setWanProfileId] = useState<string>('');
   const [arkProfileId, setArkProfileId] = useState<string>('');
   const [preview, setPreview] = useState<BenchmarkReferencePackPreview | null>(null);
   const [summary, setSummary] = useState<BenchmarkRunSummary | null>(null);
@@ -79,13 +80,19 @@ export function BenchmarkLab() {
       .then((result) => {
         setSettings(result);
         setVisionProfileId(result.activeVisionProfileId);
-        const dashscope = result.profiles.find(
+        const qwen = result.profiles.find(
           (profile) => profile.image.enabled
             && profile.image.driver === 'dashscope-image'
             && profile.id === result.activeImageProfileId,
         ) ?? result.profiles.find((profile) => profile.image.enabled && profile.image.driver === 'dashscope-image');
+        const wan = result.profiles.find(
+          (profile) => profile.image.enabled
+            && profile.image.driver === 'dashscope-image'
+            && profile.id !== qwen?.id,
+        );
         const ark = result.profiles.find((profile) => profile.image.enabled && profile.image.driver === 'volcengine-ark-image');
-        setDashscopeProfileId(dashscope?.id ?? '');
+        setQwenProfileId(qwen?.id ?? '');
+        setWanProfileId(wan?.id ?? '');
         setArkProfileId(ark?.id ?? '');
       })
       .catch((err) => setError(err instanceof Error ? err.message : '读取 AI 设置失败'));
@@ -109,11 +116,14 @@ export function BenchmarkLab() {
   const laneProfileIds = useMemo(() => {
     const mapping: Partial<Record<BenchmarkLane, string>> = {};
     for (const lane of lanes) {
-      const profileId = LANE_DRIVER_TARGETS[lane] === 'dashscope-image' ? dashscopeProfileId : arkProfileId;
+      const group = LANE_PROFILE_GROUP[lane];
+      const profileId = group === 'seedream' ? arkProfileId
+        : group === 'wan' ? wanProfileId
+        : qwenProfileId;
       if (profileId) mapping[lane] = profileId;
     }
     return mapping;
-  }, [lanes, dashscopeProfileId, arkProfileId]);
+  }, [lanes, qwenProfileId, wanProfileId, arkProfileId]);
 
   function handleFileChange(next: File | null) {
     setFile(next);
@@ -244,26 +254,39 @@ export function BenchmarkLab() {
             </select>
           </div>
           <div>
-            <span style={styles.label}>DashScope / Wan 路线生图配置</span>
+            <span style={styles.label}>Qwen 路线生图配置</span>
             <select
-              value={dashscopeProfileId}
-              onChange={(event) => setDashscopeProfileId(event.target.value)}
+              value={qwenProfileId}
+              onChange={(event) => setQwenProfileId(event.target.value)}
               style={styles.select}
             >
-              <option value="">（未选择，按活动配置）</option>
+              <option value="">（未选择，该路线不可用）</option>
               {dashscopeProfiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>{profile.name}（{profile.image.model}）</option>
               ))}
             </select>
           </div>
           <div>
-            <span style={styles.label}>方舟 Seedream 路线生图配置</span>
+            <span style={styles.label}>Wan 路线生图配置</span>
+            <select
+              value={wanProfileId}
+              onChange={(event) => setWanProfileId(event.target.value)}
+              style={styles.select}
+            >
+              <option value="">（未选择，该路线不可用）</option>
+              {dashscopeProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>{profile.name}（{profile.image.model}）</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <span style={styles.label}>Seedream 路线生图配置</span>
             <select
               value={arkProfileId}
               onChange={(event) => setArkProfileId(event.target.value)}
               style={styles.select}
             >
-              <option value="">（未选择，按活动配置）</option>
+              <option value="">（未选择，该路线不可用）</option>
               {arkProfiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>{profile.name}（{profile.image.model}）</option>
               ))}

@@ -41,6 +41,10 @@ export const ImageCompatibilitySchema = z.object({
     '4:3': z.string().trim().min(1).optional(),
   }),
   promptEnhancement: ImagePromptEnhancementSchema,
+  /** 当前配置是否真实支持提示词扩写（prompt enhancement）能力。 */
+  promptEnhancementSupported: z.boolean().default(false),
+  /** 除主源图外可额外携带的参考图上限（配置驱动，非协议硬编码）。 */
+  maxReferenceImages: z.number().int().min(0).default(0),
 });
 
 export const ImageCapabilitySchema = z.object({
@@ -155,6 +159,8 @@ export function profileDefaults(preset: AIProfilePreset): AIProfileDraftDefaults
           referenceImage: true, batchMode: 'native', sizeMode: 'mapped',
           sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' },
           promptEnhancement: 'auto',
+          promptEnhancementSupported: true,
+          maxReferenceImages: 2,
         },
       },
     };
@@ -171,6 +177,8 @@ export function profileDefaults(preset: AIProfilePreset): AIProfileDraftDefaults
           referenceImage: true, batchMode: 'single', sizeMode: 'mapped',
           sizeByRatio: { '1:1': '2048x2048', '3:4': '1536x2048', '4:3': '2048x1536' },
           promptEnhancement: 'off',
+          promptEnhancementSupported: false,
+          maxReferenceImages: 0,
         },
       },
     };
@@ -186,6 +194,8 @@ export function profileDefaults(preset: AIProfilePreset): AIProfileDraftDefaults
         referenceImage: true, batchMode: 'native', sizeMode: 'mapped',
         sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' },
         promptEnhancement: 'auto',
+        promptEnhancementSupported: false,
+        maxReferenceImages: 0,
       },
     },
   };

@@ -12,9 +12,6 @@ import { ProviderCapabilityError, ProviderConfigError, ProviderRequestError, pro
  * editRegions 不被本协议支持：显式忽略并在 capabilities 中如实声明。
  */
 
-/** DashScope 多模态生成接口输入图上限（含主源图） */
-const MAX_INPUT_IMAGES = 3;
-
 const MIME_BY_EXT: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
 };
@@ -50,9 +47,11 @@ function resolvePromptExtend(
   config: ResolvedImageConfig,
   override?: ImageGenerationInput['promptEnhancement'],
 ): boolean | undefined {
+  // Provider/profile 不支持 prompt enhancement → 完全不发送
+  if (!config.compatibility.promptEnhancementSupported) return undefined;
   const mode = override ?? config.compatibility.promptEnhancement;
   if (mode === 'on') return true;
-  if (mode === 'off') return undefined; // off 不得被静默改写为 true，这是真实实验变量
+  if (mode === 'off') return false;
   // auto: send true (recommended for DashScope)
   return true;
 }
@@ -122,10 +121,10 @@ export class DashScopeImageProvider implements ImageProvider {
 
   capabilities() {
     return {
-      supportsMultipleReferences: true,
-      maxReferenceImages: MAX_INPUT_IMAGES - 1,
+      supportsMultipleReferences: this.config.compatibility.maxReferenceImages > 0,
+      maxReferenceImages: this.config.compatibility.maxReferenceImages,
       supportsEditRegions: false,
-      supportsPromptEnhancementOverride: true,
+      supportsPromptEnhancementOverride: this.config.compatibility.promptEnhancementSupported,
     };
   }
 
@@ -135,9 +134,10 @@ export class DashScopeImageProvider implements ImageProvider {
     }
 
     const referencePaths = input.referenceImagePaths ?? [];
-    if (referencePaths.length > MAX_INPUT_IMAGES - 1) {
+    const maxRefs = this.config.compatibility.maxReferenceImages;
+    if (referencePaths.length > maxRefs) {
       throw new ProviderCapabilityError(
-        `DashScope 图像协议最多支持 ${MAX_INPUT_IMAGES} 张输入图（含源图），当前传入了 ${referencePaths.length + 1} 张。`,
+        `当前配置最多支持 ${maxRefs} 张额外参考图，当前传入了 ${referencePaths.length} 张。`,
       );
     }
 

@@ -108,6 +108,8 @@ export const BenchmarkRunRecordSchema = z.object({
   statusReason: z.string().trim().min(1).max(500).nullable(),
   /** 当前 lane 配置下 edit regions 是否真实启用（不支持时必须为 false） */
   usedEditRegions: z.boolean(),
+  /** 实际传给 provider 的额外参考图数量 */
+  usedReferenceCount: z.number().int().min(0),
   passCount: z.number().int().min(0).max(BENCHMARK_CANDIDATES_PER_RUN),
   failCount: z.number().int().min(0).max(BENCHMARK_CANDIDATES_PER_RUN),
   candidates: z.array(BenchmarkCandidateRecordSchema).max(BENCHMARK_CANDIDATES_PER_RUN),

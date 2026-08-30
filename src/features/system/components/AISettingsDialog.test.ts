@@ -8,6 +8,8 @@ const fullCompat: ImageCompatibility = {
   sizeMode: 'mapped',
   sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' },
   promptEnhancement: 'on',
+  promptEnhancementSupported: true,
+  maxReferenceImages: 2,
 };
 
 describe('normalizeImageCompatibilityForDriver', () => {

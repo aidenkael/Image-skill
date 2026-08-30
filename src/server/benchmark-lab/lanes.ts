@@ -81,8 +81,8 @@ export function laneCapabilityIssue(
   preset: BenchmarkLanePreset,
   capabilities: ImageProviderCapabilities,
 ): string | null {
-  if (preset.useReferencePack && !capabilities.supportsMultipleReferences) {
-    return '当前生图协议不支持多参考图输入，该路线不可用（不以 prompt 文本伪装）。';
+  if (preset.useReferencePack && capabilities.maxReferenceImages <= 0) {
+    return '当前生图配置不支持额外参考图，该路线不可用。';
   }
   if (preset.promptEnhancement === 'on' && !capabilities.supportsPromptEnhancementOverride) {
     return '当前生图协议不支持提示词扩写开关，该路线不可用。';

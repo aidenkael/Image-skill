@@ -21,6 +21,8 @@ const config: ResolvedImageConfig = {
     sizeMode: 'mapped',
     sizeByRatio: { '1:1': '2048x2048', '3:4': '1536x2048', '4:3': '2048x1536' },
     promptEnhancement: 'off',
+    promptEnhancementSupported: false,
+    maxReferenceImages: 0,
   },
 };
 

@@ -14,6 +14,8 @@ const baseCompat = {
   sizeMode: 'mapped' as const,
   sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' },
   promptEnhancement: 'auto' as const,
+  promptEnhancementSupported: true as const,
+  maxReferenceImages: 2,
 };
 const config: ResolvedImageConfig = {
   profileId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -155,11 +157,11 @@ describe('DashScope Image Provider（模型无关）', () => {
     expect((getBodies()[0].parameters as Record<string, unknown>).prompt_extend).toBe(true);
   });
 
-  it('promptEnhancement=off → 不发送 prompt_extend', async () => {
+  it('promptEnhancement=off + supported → 发送 prompt_extend=false', async () => {
     const offConfig = { ...config, compatibility: { ...baseCompat, promptEnhancement: 'off' as const } };
     const { getBodies } = singleLoopResponses(1);
     await new DashScopeImageProvider(offConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
-    expect((getBodies()[0].parameters as Record<string, unknown>).prompt_extend).toBeUndefined();
+    expect((getBodies()[0].parameters as Record<string, unknown>).prompt_extend).toBe(false);
   });
 
   it('promptEnhancement=auto → 发送 prompt_extend=true', async () => {
@@ -222,7 +224,7 @@ describe('DashScope Benchmark 请求变量（多参考图 + 请求级扩写覆�
     expect((body.parameters as Record<string, unknown>).prompt_extend).toBe(true);
   });
 
-  it('qwen-single-extend-off：仅主图 + 不发送 prompt_extend（off 不被静默改写）', async () => {
+  it('qwen-single-extend-off：仅主图 + prompt_extend=false（off 明确关闭）', async () => {
     const onConfig = { ...config, compatibility: { ...baseCompat, promptEnhancement: 'on' as const } };
     const { getBodies } = singleLoopResponses(1);
     await new DashScopeImageProvider(onConfig).generate({
@@ -230,7 +232,7 @@ describe('DashScope Benchmark 请求变量（多参考图 + 请求级扩写覆�
     });
     const body = getBodies()[0];
     expect(contentImages(body)).toHaveLength(1);
-    expect((body.parameters as Record<string, unknown>).prompt_extend).toBeUndefined();
+    expect((body.parameters as Record<string, unknown>).prompt_extend).toBe(false);
   });
 
   it('qwen-multi-ref：主图 + 2 张细节参考图 + prompt_extend 关闭', async () => {
@@ -248,10 +250,10 @@ describe('DashScope Benchmark 请求变量（多参考图 + 请求级扩写覆�
     const content = input.messages[0].content;
     expect(content.filter((item) => typeof item.image === 'string')).toHaveLength(3);
     expect(content[content.length - 1]).toMatchObject({ text: 'hero' });
-    expect((body.parameters as Record<string, unknown>).prompt_extend).toBeUndefined();
+    expect((body.parameters as Record<string, unknown>).prompt_extend).toBe(false);
   });
 
-  it('超过输入图上限（含主图 3 张）在请求前明确拒绝', async () => {
+  it('超过配置的 maxReferenceImages 上限在请求前明确拒绝', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ output: { choices: [] } })));
     await expect(new DashScopeImageProvider(config).generate({
       imagePath,
@@ -261,16 +263,54 @@ describe('DashScope Benchmark 请求变量（多参考图 + 请求级扩写覆�
       referenceImagePaths: [
         path.join(root, 'ref-1.png'), path.join(root, 'ref-2.png'), path.join(root, 'ref-3.png'),
       ],
-    })).rejects.toThrow(/最多支持 3 张输入图/);
+    })).rejects.toThrow(/最多支持 2 张额外参考图/);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
-  it('capabilities 如实声明多参考图/扩写覆盖能力，无 edit region', () => {
+  it('capabilities 从配置读取，而非硬编码常量', () => {
     expect(new DashScopeImageProvider(config).capabilities()).toEqual({
       supportsMultipleReferences: true,
       maxReferenceImages: 2,
       supportsEditRegions: false,
       supportsPromptEnhancementOverride: true,
     });
+  });
+});
+
+describe('DashScope prompt_extend 能力隔离（promptEnhancementSupported）', () => {
+  it('unsupported + on → payload 不含 prompt_extend', async () => {
+    const noSupportConfig = { ...config, compatibility: { ...baseCompat, promptEnhancementSupported: false as const, promptEnhancement: 'on' as const } };
+    const { getBodies } = singleLoopResponses(1);
+    await new DashScopeImageProvider(noSupportConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
+    expect((getBodies()[0].parameters as Record<string, unknown>).prompt_extend).toBeUndefined();
+  });
+
+  it('unsupported + off → payload 不含 prompt_extend', async () => {
+    const noSupportConfig = { ...config, compatibility: { ...baseCompat, promptEnhancementSupported: false as const, promptEnhancement: 'off' as const } };
+    const { getBodies } = singleLoopResponses(1);
+    await new DashScopeImageProvider(noSupportConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
+    expect((getBodies()[0].parameters as Record<string, unknown>).prompt_extend).toBeUndefined();
+  });
+
+  it('maxReferenceImages=8 时 3 个额外参考图不被拒绝', async () => {
+    const wideConfig = { ...config, compatibility: { ...baseCompat, maxReferenceImages: 8 } };
+    const { getBodies } = singleLoopResponses(1);
+    await new DashScopeImageProvider(wideConfig).generate({
+      imagePath,
+      prompt: 'hero',
+      ratio: '1:1',
+      count: 1,
+      referenceImagePaths: [path.join(root, 'ref-1.png'), path.join(root, 'ref-2.png'), path.join(root, 'ref-3.png')],
+    });
+    const body = getBodies()[0];
+    const input = body.input as { messages: Array<{ content: Array<Record<string, unknown>> }> };
+    expect(input.messages[0].content.filter((item) => typeof item.image === 'string')).toHaveLength(4);
+  });
+
+  it('maxReferenceImages=0 时 capabilities 如实声明不支持多参考图', () => {
+    const noRefConfig = { ...config, compatibility: { ...baseCompat, maxReferenceImages: 0 } };
+    const caps = new DashScopeImageProvider(noRefConfig).capabilities();
+    expect(caps.supportsMultipleReferences).toBe(false);
+    expect(caps.maxReferenceImages).toBe(0);
   });
 });
