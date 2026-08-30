@@ -304,4 +304,75 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
     expect(body).toContain('score>=70');
     await expect(lastLog()).resolves.toMatchObject({ operation: 'vision.hero-review', status: 'succeeded' });
   });
+
+  /* ── Protocol fallback / schema retry 独立状态机 ── */
+
+  it('状态机 Case 2: protocol fallback 后仍保留 schema retry', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return Response.json({ error: { message: 'json_schema not supported' } }, { status: 400 });
+      }
+      if (callCount === 2) {
+        return Response.json({ choices: [{ message: { content: JSON.stringify({ ...payload, analysis: { ...payload.analysis, category: '' } }) } }] });
+      }
+      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+    }));
+    await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).resolves.toEqual(payload);
+    expect(callCount).toBe(3);
+  });
+
+  it('状态机 Case 3: 两次 protocol fallback 后仍保留 schema retry', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      callCount += 1;
+      const body = JSON.parse(String(init.body));
+      if (callCount === 1) {
+        expect((body.response_format as { type: string }).type).toBe('json_schema');
+        return Response.json({ error: { message: 'json_schema not supported' } }, { status: 400 });
+      }
+      if (callCount === 2) {
+        expect((body.response_format as { type: string }).type).toBe('json_object');
+        return Response.json({ error: { message: 'json_object not supported' } }, { status: 400 });
+      }
+      if (callCount === 3) {
+        expect(body.response_format).toBeUndefined();
+        return Response.json({ choices: [{ message: { content: JSON.stringify({ ...payload, analysis: { ...payload.analysis, category: '' } }) } }] });
+      }
+      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+    }));
+    await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).resolves.toEqual(payload);
+    expect(callCount).toBe(4);
+  });
+
+  it('状态机 Case 4: schema retry 最多一次，第二次仍失败则报错', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ ...payload, analysis: { ...payload.analysis, category: '' } }) } }] });
+    }));
+    await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).rejects.toThrow(/AI 返回结果无法解析/);
+    expect(callCount).toBe(2);
+  });
+
+  it('状态机 Case 5: auth/rate-limit/server/network 不触发任何 fallback 或 retry', async () => {
+    for (const [status, response] of [
+      [401, () => new Response('unauthorized', { status: 401 })],
+      [403, () => new Response('forbidden', { status: 403 })],
+      [404, () => new Response('model not found', { status: 404 })],
+      [429, () => new Response('rate limit', { status: 429 })],
+      [500, () => new Response('internal error', { status: 500 })],
+    ] as const) {
+      let callCount = 0;
+      vi.stubGlobal('fetch', vi.fn(async () => { callCount += 1; return response(); }));
+      await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).rejects.toThrow();
+      expect(callCount).toBe(1);
+    }
+    // network error
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => { callCount += 1; throw new TypeError('fetch failed'); }));
+    await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).rejects.toThrow();
+    expect(callCount).toBe(1);
+  });
 });

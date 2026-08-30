@@ -240,11 +240,15 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
     const structuredMode = this.config.compatibility.structuredOutput;
     let modeResult = resolveStructuredMode(structuredMode, schemaName, options.schema, jsonSchemaOverride);
 
-    // Auto fallback: attempt with current mode, downgrade on protocol unsupported
-    const maxAttempts = structuredMode === 'auto' ? 3 : 1;
-    let lastError: unknown = null;
+    // Protocol fallback and schema retry are independent state machines.
+    // Protocol fallback: json-schema → json-object → text-json (auto mode only, on HTTP 400/422 unsupported).
+    // Schema retry: at most 1 across the entire request, independent of protocol fallback count.
+    const maxProtocolFallback = structuredMode === 'auto' ? 2 : 0;
+    let protocolFallbackCount = 0;
+    let schemaRetryUsed = false;
+    let lastProtocolError: { status: number; body: string } | null = null;
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    while (true) {
       const systemPrompt = [options.system, modeResult.systemSuffix].filter(Boolean).join('\n');
       const content = [...options.content, { type: 'text', text: options.user }];
       const body = {
@@ -272,11 +276,12 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
       const responseRaw = await response.text();
 
       if (!response.ok) {
-        // Check if this is a structured output format unsupported error (auto mode only)
+        // Protocol fallback: only for auto mode + explicit unsupported error
         if (structuredMode === 'auto' && isStructuredOutputUnsupported(response.status, responseRaw)) {
           const nextMode = downgradeMode(modeResult.mode);
-          if (nextMode) {
-            lastError = { status: response.status, body: responseRaw };
+          if (nextMode && protocolFallbackCount < maxProtocolFallback) {
+            protocolFallbackCount += 1;
+            lastProtocolError = { status: response.status, body: responseRaw };
             modeResult = resolveStructuredMode(nextMode, schemaName, options.schema, jsonSchemaOverride);
             await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet: responseRaw, structuredMode: modeResult.mode, structuredFallback: nextMode });
             continue;
@@ -287,7 +292,7 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
         throw providerHttpError(response.status);
       }
 
-      // HTTP OK - parse and validate
+      // HTTP OK — parse and validate
       let parsedBody: unknown;
       try { parsedBody = JSON.parse(responseRaw); }
       catch {
@@ -315,24 +320,23 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
         return normalized.data;
       }
 
-      // Schema validation failed — allow one retry with downgraded mode (auto only)
-      if (structuredMode === 'auto' && attempt === 0) {
-        const nextMode = downgradeMode(modeResult.mode);
-        if (nextMode) {
-          modeResult = resolveStructuredMode(nextMode, schemaName, options.schema, jsonSchemaOverride);
-          await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, zodIssues: zodIssues(normalized.error), structuredMode: modeResult.mode, structuredFallback: 'schema-retry' });
-          continue;
+      // Schema validation failed — one retry allowed across the entire request
+      if (!schemaRetryUsed) {
+        schemaRetryUsed = true;
+        if (structuredMode === 'auto' && modeResult.mode !== 'text-json') {
+          const nextMode = downgradeMode(modeResult.mode);
+          if (nextMode) {
+            modeResult = resolveStructuredMode(nextMode, schemaName, options.schema, jsonSchemaOverride);
+          }
         }
+        await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, zodIssues: zodIssues(normalized.error), structuredMode: modeResult.mode, structuredFallback: 'schema-retry' });
+        continue;
       }
 
       await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, zodIssues: zodIssues(normalized.error), structuredMode: modeResult.mode });
       throw invalidProviderResponse(requestId);
     }
 
-    // Exhausted fallback attempts
-    if (lastError && typeof lastError === 'object' && 'status' in lastError) {
-      throw providerHttpError((lastError as { status: number }).status);
-    }
-    throw invalidProviderResponse(requestId);
+    // Unreachable — while(true) always returns or throws
   }
 }

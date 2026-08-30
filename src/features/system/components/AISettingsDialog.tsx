@@ -12,6 +12,7 @@ import {
   type AISettingsPublic,
   type ActiveAIProfilesInput,
   type ImageBatchMode,
+  type ImageCompatibility,
   type ImagePromptEnhancement,
   type ImageSizeMode,
   type StructuredOutputMode,
@@ -33,6 +34,21 @@ interface Props extends AISettingsActions {
 }
 
 type Draft = AIProfileInput & { apiKey: string };
+
+/** Normalize image compatibility when switching driver.
+ *  Ark does not support native batch or prompt enhancement — coerce to safe defaults.
+ *  Other drivers keep the current values unchanged. */
+export function normalizeImageCompatibilityForDriver(
+  driver: string,
+  compatibility: ImageCompatibility,
+): ImageCompatibility {
+  if (driver !== 'volcengine-ark-image') return compatibility;
+  return {
+    ...compatibility,
+    batchMode: compatibility.batchMode === 'native' ? 'single' : compatibility.batchMode,
+    promptEnhancement: compatibility.promptEnhancement === 'on' ? 'off' : compatibility.promptEnhancement,
+  };
+}
 
 function newDraft(preset: AIProfilePreset = 'aliyun-qwen'): Draft {
   const defaults = profileDefaults(preset);
@@ -233,7 +249,7 @@ export function AISettingsDialog(props: Props) {
               endpoint={draft.image.endpoint}
               model={draft.image.model}
               compatibility={draft.image.compatibility}
-              onDriver={(driver) => setDraft((value) => ({ ...value, image: { ...value.image, driver: driver as Draft['image']['driver'] } }))}
+              onDriver={(driver) => setDraft((value) => ({ ...value, image: { ...value.image, driver: driver as Draft['image']['driver'], compatibility: normalizeImageCompatibilityForDriver(driver, value.image.compatibility) } }))}
               onEndpoint={(endpoint) => setDraft((value) => ({ ...value, image: { ...value.image, endpoint } }))}
               onModel={(model) => setDraft((value) => ({ ...value, image: { ...value.image, model } }))}
               onCompatibility={(patch) => setDraft((value) => ({ ...value, image: { ...value.image, compatibility: { ...value.image.compatibility, ...patch } } }))}
@@ -311,7 +327,7 @@ function ImageCapabilityEditor(props: {
         <summary className="advanced-toggle">高级兼容设置</summary>
         <label className="capability-toggle"><input type="checkbox" checked={props.compatibility.referenceImage} onChange={(event) => props.onCompatibility({ referenceImage: event.target.checked })} />参考图输入</label>
         <label className="field">批量生成
-          <select className="input" value={isArk && props.compatibility.batchMode === 'native' ? 'single' : props.compatibility.batchMode} onChange={(event) => props.onCompatibility({ batchMode: event.target.value as ImageBatchMode })}>
+          <select className="input" value={props.compatibility.batchMode} onChange={(event) => props.onCompatibility({ batchMode: event.target.value as ImageBatchMode })}>
             <option value="auto">自动</option>
             <option value="single">单张循环</option>
             <option value="native" disabled={isArk}>原生批量{isArk ? '（当前协议不支持）' : ''}</option>
@@ -331,7 +347,7 @@ function ImageCapabilityEditor(props: {
           </>
         )}
         <label className="field">提示词扩写
-          <select className="input" value={isArk && props.compatibility.promptEnhancement === 'on' ? 'off' : props.compatibility.promptEnhancement} onChange={(event) => props.onCompatibility({ promptEnhancement: event.target.value as ImagePromptEnhancement })}>
+          <select className="input" value={props.compatibility.promptEnhancement} onChange={(event) => props.onCompatibility({ promptEnhancement: event.target.value as ImagePromptEnhancement })}>
             <option value="auto">自动</option>
             <option value="off">关</option>
             <option value="on" disabled={isArk}>开{isArk ? '（当前协议不支持）' : ''}</option>
