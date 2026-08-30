@@ -172,6 +172,7 @@ describe('v1 → v2 配置迁移', () => {
     expect(profile.vision.compatibility).toEqual({ imageInput: true, structuredOutput: 'auto' });
     expect(profile.image.compatibility).toMatchObject({
       referenceImage: true, batchMode: 'native', sizeMode: 'mapped',
+      promptEnhancementSupported: true, maxReferenceImages: 2,
     });
     expect(settings.activeVisionProfileId).toBe(profileId);
     expect(settings.activeImageProfileId).toBe(profileId);
@@ -234,5 +235,58 @@ describe('v1 → v2 配置迁移', () => {
     const imageConfig = await resolveProfileImageConfig(profileId);
     expect(imageConfig.model).toBe('future-image-model-2099');
     expect(imageConfig.compatibility.referenceImage).toBe(true);
+  });
+});
+
+describe('v2 配置新 capability 字段持久化', () => {
+  it('旧 v2 缺少 promptEnhancementSupported/maxReferenceImages 时 Zod default 正常加载', async () => {
+    const profileId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const now = '2026-08-30T00:00:00.000Z';
+    const v2Store = {
+      schemaVersion: 2,
+      profiles: [{
+        id: profileId, name: '旧 v2', preset: 'custom', apiKey: 'sk-old-v2-secret',
+        vision: { enabled: false, driver: 'openai-compatible-vision', endpoint: 'https://v.example/chat', model: 'm1', compatibility: { imageInput: false, structuredOutput: 'auto' } },
+        image: { enabled: true, driver: 'dashscope-image', endpoint: 'https://i.example/gen', model: 'm2',
+          compatibility: { referenceImage: true, batchMode: 'native', sizeMode: 'provider-default', sizeByRatio: {}, promptEnhancement: 'auto' },
+        },
+        createdAt: now, updatedAt: now,
+      }],
+      activeVisionProfileId: null,
+      activeImageProfileId: profileId,
+    };
+    await writeJson(runtimePath('settings', 'ai-profiles.json'), v2Store);
+    const settings = await getAISettingsPublic();
+    expect(settings.profiles[0].image.compatibility.promptEnhancementSupported).toBe(false);
+    expect(settings.profiles[0].image.compatibility.maxReferenceImages).toBe(0);
+    const config = await resolveProfileImageConfig(profileId);
+    expect(config.compatibility.promptEnhancementSupported).toBe(false);
+    expect(config.compatibility.maxReferenceImages).toBe(0);
+  });
+
+  it('保存/读取显式 capability（promptEnhancementSupported=false, maxReferenceImages=8）不丢失', async () => {
+    const defaults = profileDefaults('custom');
+    const wanInput: AIProfileInput = {
+      name: 'Wan 配置', preset: 'custom', apiKey: 'sk-wan-config-123',
+      vision: { ...defaults.vision, enabled: false, endpoint: 'https://v.example/chat', model: 'm1' },
+      image: {
+        ...defaults.image,
+        enabled: true,
+        endpoint: 'https://i.example/gen',
+        model: 'wan2.7-image-pro',
+        compatibility: {
+          ...defaults.image.compatibility,
+          promptEnhancementSupported: false,
+          maxReferenceImages: 8,
+        },
+      },
+    };
+    const settings = await createAIProfile(wanInput);
+    const id = settings.profiles[0].id;
+    expect(settings.profiles[0].image.compatibility.promptEnhancementSupported).toBe(false);
+    expect(settings.profiles[0].image.compatibility.maxReferenceImages).toBe(8);
+    const config = await resolveProfileImageConfig(id);
+    expect(config.compatibility.promptEnhancementSupported).toBe(false);
+    expect(config.compatibility.maxReferenceImages).toBe(8);
   });
 });

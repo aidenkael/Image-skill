@@ -36,7 +36,7 @@ interface Props extends AISettingsActions {
 type Draft = AIProfileInput & { apiKey: string };
 
 /** Normalize image compatibility when switching driver.
- *  Ark does not support native batch or prompt enhancement — coerce to safe defaults.
+ *  Ark does not support native batch, prompt enhancement, or multi-reference — coerce to safe defaults.
  *  Other drivers keep the current values unchanged. */
 export function normalizeImageCompatibilityForDriver(
   driver: string,
@@ -46,7 +46,9 @@ export function normalizeImageCompatibilityForDriver(
   return {
     ...compatibility,
     batchMode: compatibility.batchMode === 'native' ? 'single' : compatibility.batchMode,
-    promptEnhancement: compatibility.promptEnhancement === 'on' ? 'off' : compatibility.promptEnhancement,
+    promptEnhancement: 'off',
+    promptEnhancementSupported: false,
+    maxReferenceImages: 0,
   };
 }
 
@@ -348,11 +350,30 @@ function ImageCapabilityEditor(props: {
             <label className="field field-compact">4:3 尺寸<input className="input input-compact" value={props.compatibility.sizeByRatio['4:3'] ?? ''} onChange={(event) => props.onCompatibility({ sizeByRatio: { ...props.compatibility.sizeByRatio, '4:3': event.target.value || undefined } })} /></label>
           </>
         )}
+        <label className="capability-toggle"><input type="checkbox" checked={props.compatibility.promptEnhancementSupported} disabled={isArk} onChange={(event) => props.onCompatibility({ promptEnhancementSupported: event.target.checked, ...(event.target.checked ? {} : { promptEnhancement: 'off' as ImagePromptEnhancement }) })} />支持提示词扩写</label>
+        <label className="field field-compact">最大额外参考图
+          <input
+            className="input input-compact"
+            type="number"
+            min={0}
+            max={8}
+            step={1}
+            value={props.compatibility.maxReferenceImages}
+            disabled={isArk}
+            onChange={(event) => {
+              const next = Number.parseInt(event.target.value, 10);
+              if (Number.isInteger(next)) {
+                props.onCompatibility({ maxReferenceImages: Math.max(0, Math.min(8, next)) });
+              }
+            }}
+          />
+        </label>
         <label className="field">提示词扩写
-          <select className="input" value={props.compatibility.promptEnhancement} onChange={(event) => props.onCompatibility({ promptEnhancement: event.target.value as ImagePromptEnhancement })}>
+          <select className="input" value={props.compatibility.promptEnhancement} disabled={!props.compatibility.promptEnhancementSupported} onChange={(event) => props.onCompatibility({ promptEnhancement: event.target.value as ImagePromptEnhancement })}>
+            {!props.compatibility.promptEnhancementSupported && <option value={props.compatibility.promptEnhancement}>不支持</option>}
             <option value="auto">自动</option>
             <option value="off">关</option>
-            <option value="on" disabled={isArk}>开{isArk ? '（当前协议不支持）' : ''}</option>
+            <option value="on">开</option>
           </select>
         </label>
       </details>

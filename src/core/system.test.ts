@@ -9,6 +9,7 @@ describe('AI Provider 预设', () => {
     expect(defaults.image).toMatchObject({ enabled: true, driver: 'dashscope-image', model: 'qwen-image-3.0-pro' });
     expect(defaults.image.compatibility).toMatchObject({
       referenceImage: true, batchMode: 'native', sizeMode: 'mapped', promptEnhancement: 'auto',
+      promptEnhancementSupported: true, maxReferenceImages: 2,
     });
     expect(defaults.image.compatibility.sizeByRatio).toEqual({ '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' });
 
@@ -26,10 +27,14 @@ describe('AI Provider 预设', () => {
     expect(ark.image).toMatchObject({ enabled: true, driver: 'volcengine-ark-image', model: 'doubao-seedream-4-0-250828' });
     expect(ark.image.compatibility).toMatchObject({
       referenceImage: true, batchMode: 'single', sizeMode: 'mapped', promptEnhancement: 'off',
+      promptEnhancementSupported: false, maxReferenceImages: 0,
     });
     const custom = profileDefaults('custom');
     expect(custom.vision.enabled).toBe(false);
     expect(custom.image.enabled).toBe(false);
+    expect(custom.image.compatibility).toMatchObject({
+      promptEnhancementSupported: false, maxReferenceImages: 0,
+    });
   });
 
   it('任意未来模型名可通过 schema 校验（model 是 opaque string）', () => {
