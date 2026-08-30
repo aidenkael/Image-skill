@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   HeroBatchReviewSchema,
   HeroBriefSchema,
+  heroBriefSchemaForHumanPolicy,
   type HeroBrief,
 } from './hero-workflow';
 
@@ -79,6 +80,48 @@ describe('HeroBrief 契约', () => {
   });
 });
 
+describe('heroBriefSchemaForHumanPolicy（人物政策硬约束）', () => {
+  it('require：human-interaction + 非空 interaction 通过，且结果仍是 HeroBrief', () => {
+    const schema = heroBriefSchemaForHumanPolicy('require');
+    const parsed: HeroBrief = schema.parse(articulatedBrief);
+    expect(parsed.presentation.mode).toBe('human-interaction');
+    expect(parsed.presentation.interaction).toBe('模特自然斜挎行走');
+  });
+
+  it('require：scene-staging 无法通过 schema', () => {
+    expect(heroBriefSchemaForHumanPolicy('require').safeParse(rigidBrief).success).toBe(false);
+  });
+
+  it('require：human-interaction 但 interaction=null 无法通过 schema', () => {
+    expect(heroBriefSchemaForHumanPolicy('require').safeParse({
+      ...articulatedBrief,
+      presentation: { ...articulatedBrief.presentation, interaction: null },
+    }).success).toBe(false);
+  });
+
+  it('avoid：scene-staging + interaction=null 通过', () => {
+    expect(heroBriefSchemaForHumanPolicy('avoid').safeParse(rigidBrief).success).toBe(true);
+  });
+
+  it('avoid：human-interaction 无法通过 schema', () => {
+    expect(heroBriefSchemaForHumanPolicy('avoid').safeParse(articulatedBrief).success).toBe(false);
+  });
+
+  it('avoid：scene-staging 但 interaction 非空无法通过 schema', () => {
+    expect(heroBriefSchemaForHumanPolicy('avoid').safeParse({
+      ...rigidBrief,
+      presentation: { ...rigidBrief.presentation, interaction: '模特手持' },
+    }).success).toBe(false);
+  });
+
+  it('auto：保持现有自由决策，两种合法 presentation 都可通过', () => {
+    const schema = heroBriefSchemaForHumanPolicy('auto');
+    expect(schema).toBe(HeroBriefSchema);
+    expect(schema.safeParse(rigidBrief).success).toBe(true);
+    expect(schema.safeParse(articulatedBrief).success).toBe(true);
+  });
+});
+
 describe('HeroBatchReview 契约', () => {
   const assessment = (candidateIndex: number, hard: string[] = []) => ({
     candidateIndex,
@@ -100,5 +143,12 @@ describe('HeroBatchReview 契约', () => {
       assessments: [assessment(0, ['not_a_real_failure'])],
       preferredOrder: [0],
     }).success).toBe(false);
+  });
+
+  it('human_policy_violated 是合法硬性失败', () => {
+    expect(HeroBatchReviewSchema.safeParse({
+      assessments: [assessment(0, ['human_policy_violated'])],
+      preferredOrder: [0],
+    }).success).toBe(true);
   });
 });

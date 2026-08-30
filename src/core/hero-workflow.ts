@@ -63,6 +63,35 @@ export const HeroBriefSchema = z.object({
 });
 export type HeroBrief = z.infer<typeof HeroBriefSchema>;
 
+/**
+ * 按人物政策收窄 HeroBrief 的结构校验：
+ * require/avoid 的人物政策在 Schema 层硬强制，使 Director 的 structured output、
+ * 协议 fallback 与 schema retry 自动遵守同一业务不变量；auto 保持自由决策。
+ */
+export function heroBriefSchemaForHumanPolicy(
+  policy: HeroHumanPolicy,
+) {
+  if (policy === 'require') {
+    return HeroBriefSchema.extend({
+      presentation: HeroBriefSchema.shape.presentation.extend({
+        mode: z.enum(['human-interaction']),
+        interaction: z.string().trim().min(1).max(240),
+      }),
+    });
+  }
+
+  if (policy === 'avoid') {
+    return HeroBriefSchema.extend({
+      presentation: HeroBriefSchema.shape.presentation.extend({
+        mode: z.enum(['scene-staging']),
+        interaction: z.null(),
+      }),
+    });
+  }
+
+  return HeroBriefSchema;
+}
+
 /** 硬性结构失败：任一存在即该候选图不可用（服务端确定性判定）。 */
 export const HeroHardFailureSchema = z.enum([
   'product_identity_changed',
@@ -74,6 +103,8 @@ export const HeroHardFailureSchema = z.enum([
   'proportion_wrong',
   'text_logo_pattern_corrupted',
   'impossible_human_contact',
+  /** 人物政策违反：require 缺少有意义人物互动，或 avoid 出现任何人物/人体部位 */
+  'human_policy_violated',
   'severe_generation_artifact',
 ]);
 export type HeroHardFailure = z.infer<typeof HeroHardFailureSchema>;

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { HeroBatchReviewSchema, HeroBriefSchema } from '@/core/hero-workflow';
+import { HeroBatchReviewSchema, heroBriefSchemaForHumanPolicy } from '@/core/hero-workflow';
 import { ProductIntelligencePayloadSchema } from '@/core/intelligence';
 import { writeAIRequestLog, type AIRequestLog } from '@/server/logging/ai-log';
 import type { ResolvedVisionConfig } from '@/server/settings/ai';
@@ -124,9 +124,13 @@ function reviewHeroBatchInstruction(input: HeroBatchReviewInput): string {
     'repairInstruction: for each rejected candidate, one concrete Simplified-Chinese-compatible repair sentence usable for regeneration; null when the candidate is usable.',
   );
   if (input.humanPolicy === 'avoid') {
-    parts.push('Hard constraint: candidates showing any person, hand, body part or silhouette must fail.');
+    parts.push(
+      'Human policy=avoid is a hard delivery requirement. If any person, hand, body part, silhouette or human figure appears, add "human_policy_violated" to hardFailures.',
+    );
   } else if (input.humanPolicy === 'require') {
-    parts.push('Hard constraint: candidates without meaningful human interaction must fail.');
+    parts.push(
+      'Human policy=require is a hard delivery requirement. If the candidate does not contain meaningful, physically plausible human interaction with the product, add "human_policy_violated" to hardFailures. A decorative/background person who does not meaningfully interact with the product does not satisfy this requirement.',
+    );
   }
   return parts.join('\n');
 }
@@ -184,12 +188,15 @@ export class OpenAICompatibleVisionProvider implements VisionProvider {
   }
 
   async directHero(input: HeroDirectorInput) {
+    // 人物政策是业务不变量：由本次输入直接决定 Zod Schema，
+    // structured output、协议 fallback 与 schema retry 自动遵守同一约束。
+    const schema = heroBriefSchemaForHumanPolicy(input.humanPolicy);
     return this.requestStructured({
       input,
       operation: 'hero-director',
       user: directHeroInstruction(input),
       content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.asset.buffer.toString('base64')}` } }],
-      schema: HeroBriefSchema,
+      schema,
       schemaName: 'hero_brief',
     });
   }

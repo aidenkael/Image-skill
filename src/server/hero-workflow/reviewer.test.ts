@@ -122,6 +122,17 @@ describe('reviewHeroCandidates（批量质检）', () => {
     expect(outcome.reviewed.every((item) => !item.usable)).toBe(true);
   });
 
+  it('human_policy_violated 确定性不可交付；hardFailures 为空仍可用', async () => {
+    previewMock.mockResolvedValue(Buffer.from('preview'));
+    reviewHeroBatchMock.mockResolvedValue(review([
+      assessment(0, ['human_policy_violated'], '补充有意义的人物与商品互动'),
+      assessment(1),
+    ], [1, 0]));
+    const outcome = await reviewHeroCandidates(input, brief, [image('c1.png'), image('c2.png')]);
+    expect(outcome.reviewed[0].usable).toBe(false);
+    expect(outcome.reviewed[1].usable).toBe(true);
+  });
+
   it('仅 excessive_bokeh 仍可用（软性问题不拒绝）', async () => {
     previewMock.mockResolvedValue(Buffer.from('preview'));
     reviewHeroBatchMock.mockResolvedValue(review([

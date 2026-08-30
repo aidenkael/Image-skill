@@ -98,6 +98,12 @@ async function logFiles(): Promise<string[]> {
   return (await fs.readdir(dir).catch(() => [])).sort();
 }
 
+/** 读取捕获请求中 strict JSON Schema 的 presentation 属性定义 */
+function capturedPresentationSchema(captured: Record<string, unknown>) {
+  const format = captured.response_format as { json_schema: { schema: Record<string, unknown> } };
+  return ((format.json_schema.schema.properties as Record<string, Record<string, unknown>>).presentation.properties as Record<string, Record<string, unknown>>);
+}
+
 describe('OpenAI 兼容识图 Provider（模型无关）', () => {
   it('json-schema 模式发送 strict response_format，与 model 名无关', async () => {
     const getStrict = responseBody();
@@ -294,7 +300,81 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
     expect(presentation.scaleCue.type).toEqual(['string', 'null']);
   });
 
+  it('require 政策收窄 strict JSON Schema：mode 只允许 human-interaction 且 interaction 不可为 null', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(humanBriefPayload) } }] });
+    }));
+    await new OpenAICompatibleVisionProvider(jsonSchemaConfig).directHero(directorInput('require'));
+    const presentation = capturedPresentationSchema(captured);
+    expect(presentation.mode.enum).toEqual(['human-interaction']);
+    expect(presentation.interaction.type).toBe('string');
+  });
+
+  it('avoid 政策收窄 strict JSON Schema：mode 只允许 scene-staging 且 interaction 只能是 null', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(briefPayload) } }] });
+    }));
+    await new OpenAICompatibleVisionProvider(jsonSchemaConfig).directHero(directorInput('avoid'));
+    const presentation = capturedPresentationSchema(captured);
+    expect(presentation.mode.enum).toEqual(['scene-staging']);
+    expect(presentation.interaction.type).toBe('null');
+  });
+
+  it('require：错误 scene-staging 策划即使经 schema retry 也最终 reject，fetch 恰好 2 次', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      return Response.json({ choices: [{ message: { content: JSON.stringify(briefPayload) } }] });
+    }));
+    await expect(new OpenAICompatibleVisionProvider(autoConfig).directHero(directorInput('require')))
+      .rejects.toThrow(/AI 返回结果无法解析/);
+    expect(callCount).toBe(2);
+  });
+
+  it('avoid：错误 human-interaction 策划最终 reject，不返回错误 HeroBrief', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      return Response.json({ choices: [{ message: { content: JSON.stringify(humanBriefPayload) } }] });
+    }));
+    await expect(new OpenAICompatibleVisionProvider(autoConfig).directHero(directorInput('avoid')))
+      .rejects.toThrow(/AI 返回结果无法解析/);
+    expect(callCount).toBe(2);
+  });
+
+  it('require：正确 human-interaction 策划成功返回', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: JSON.stringify(humanBriefPayload) } }] })));
+    await expect(new OpenAICompatibleVisionProvider(autoConfig).directHero(directorInput('require'))).resolves.toEqual(humanBriefPayload);
+  });
+
   /* ── Hero 批量 QA ── */
+
+  it('批量 QA 指令把人物政策明确映射为 human_policy_violated（auto 不产生该 failure）', async () => {
+    const run = async (humanPolicy: 'require' | 'avoid' | 'auto') => {
+      let captured: Record<string, unknown> = {};
+      vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+        captured = JSON.parse(String(init.body));
+        return Response.json({ choices: [{ message: { content: JSON.stringify(batchReviewPayload) } }] });
+      }));
+      await new OpenAICompatibleVisionProvider(jsonObjectConfig).reviewHeroBatch({ ...batchReviewInput(), humanPolicy });
+      const userText = ((captured.messages as Array<{ role: string; content: Array<{ text?: string }> }>)
+        .find((message) => message.role === 'user')!.content)
+        .map((item) => item.text ?? '').join('\n');
+      if (humanPolicy === 'auto') {
+        expect(userText).not.toContain('human_policy_violated');
+      } else {
+        expect(userText).toContain('human_policy_violated');
+        expect(userText).toContain(`Human policy=${humanPolicy} is a hard delivery requirement`);
+      }
+    };
+    await run('require');
+    await run('avoid');
+    await run('auto');
+  });
 
   it('reviewHeroBatch 一次请求包含源图与全部候选图并解析批量评估', async () => {
     let captured: Record<string, unknown> = {};
