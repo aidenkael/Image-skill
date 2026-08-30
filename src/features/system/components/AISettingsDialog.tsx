@@ -11,6 +11,10 @@ import {
   type AIProfilePublic,
   type AISettingsPublic,
   type ActiveAIProfilesInput,
+  type ImageBatchMode,
+  type ImagePromptEnhancement,
+  type ImageSizeMode,
+  type StructuredOutputMode,
 } from '@/core/system';
 
 export interface AISettingsActions {
@@ -201,15 +205,41 @@ export function AISettingsDialog(props: Props) {
 
           <div className="profile-editor">
             <div className="profile-editor-heading"><strong>{isNew ? '新建配置' : '编辑配置'}</strong>{!isNew ? <button type="button" className="danger-link" onClick={() => setConfirmDelete(true)}>删除</button> : null}</div>
-            {confirmDelete ? <div className="delete-confirm"><span>确定删除“{selectedProfile?.name}”吗？</span><button type="button" className="btn danger-button" disabled={busy} onClick={() => void remove()}>确认删除</button><button type="button" className="btn" onClick={() => setConfirmDelete(false)}>取消</button></div> : null}
+            {confirmDelete ? <div className="delete-confirm"><span>确定删除"{selectedProfile?.name}"吗？</span><button type="button" className="btn danger-button" disabled={busy} onClick={() => void remove()}>确认删除</button><button type="button" className="btn" onClick={() => setConfirmDelete(false)}>取消</button></div> : null}
             <div className="profile-fields">
               <label className="field">配置名称<input className="input" maxLength={60} value={draft.name} onChange={(event) => setDraft((value) => ({ ...value, name: event.target.value }))} /></label>
               <label className="field">提供商预设<select className="input" value={draft.preset} onChange={(event) => changePreset(event.target.value as AIProfilePreset)}>{Object.entries(PROVIDER_PRESET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               <label className="field">API Key<input className="input" type="password" autoComplete="new-password" value={draft.apiKey} onChange={(event) => setDraft((value) => ({ ...value, apiKey: event.target.value }))} placeholder={isNew ? '必填，仅保存在服务端' : `${selectedProfile?.maskedKey ?? ''}（留空保持不变）`} /></label>
             </div>
 
-            <CapabilityEditor title="商品分析" enabled={draft.vision.enabled} onEnabled={(enabled) => setDraft((value) => ({ ...value, vision: { ...value.vision, enabled } }))} driver={draft.vision.driver} driverOptions={[['openai-compatible-vision', 'OpenAI 兼容识图']]} onDriver={(driver) => setDraft((value) => ({ ...value, vision: { ...value.vision, driver: driver as 'openai-compatible-vision' } }))} endpoint={draft.vision.endpoint} onEndpoint={(endpoint) => setDraft((value) => ({ ...value, vision: { ...value.vision, endpoint } }))} model={draft.vision.model} onModel={(model) => setDraft((value) => ({ ...value, vision: { ...value.vision, model } }))} onTest={() => void test('vision')} canTest={!isNew && draft.vision.enabled && !busy} />
-            <CapabilityEditor title="氛围主图" enabled={draft.image.enabled} onEnabled={(enabled) => setDraft((value) => ({ ...value, image: { ...value.image, enabled } }))} driver={draft.image.driver} driverOptions={[["dashscope-qwen-image", '百炼千问图片'], ["volcengine-ark-image", '火山方舟图片']]} onDriver={(driver) => setDraft((value) => ({ ...value, image: { ...value.image, driver: driver as Draft['image']['driver'] } }))} endpoint={draft.image.endpoint} onEndpoint={(endpoint) => setDraft((value) => ({ ...value, image: { ...value.image, endpoint } }))} model={draft.image.model} onModel={(model) => setDraft((value) => ({ ...value, image: { ...value.image, model } }))} onTest={() => void test('image')} canTest={!isNew && draft.image.enabled && !busy} />
+            <VisionCapabilityEditor
+              enabled={draft.vision.enabled}
+              onEnabled={(enabled) => setDraft((value) => ({ ...value, vision: { ...value.vision, enabled } }))}
+              driver={draft.vision.driver}
+              endpoint={draft.vision.endpoint}
+              model={draft.vision.model}
+              compatibility={draft.vision.compatibility}
+              onDriver={(driver) => setDraft((value) => ({ ...value, vision: { ...value.vision, driver: driver as 'openai-compatible-vision' } }))}
+              onEndpoint={(endpoint) => setDraft((value) => ({ ...value, vision: { ...value.vision, endpoint } }))}
+              onModel={(model) => setDraft((value) => ({ ...value, vision: { ...value.vision, model } }))}
+              onCompatibility={(patch) => setDraft((value) => ({ ...value, vision: { ...value.vision, compatibility: { ...value.vision.compatibility, ...patch } } }))}
+              onTest={() => void test('vision')}
+              canTest={!isNew && draft.vision.enabled && !busy}
+            />
+            <ImageCapabilityEditor
+              enabled={draft.image.enabled}
+              onEnabled={(enabled) => setDraft((value) => ({ ...value, image: { ...value.image, enabled } }))}
+              driver={draft.image.driver}
+              endpoint={draft.image.endpoint}
+              model={draft.image.model}
+              compatibility={draft.image.compatibility}
+              onDriver={(driver) => setDraft((value) => ({ ...value, image: { ...value.image, driver: driver as Draft['image']['driver'] } }))}
+              onEndpoint={(endpoint) => setDraft((value) => ({ ...value, image: { ...value.image, endpoint } }))}
+              onModel={(model) => setDraft((value) => ({ ...value, image: { ...value.image, model } }))}
+              onCompatibility={(patch) => setDraft((value) => ({ ...value, image: { ...value.image, compatibility: { ...value.image.compatibility, ...patch } } }))}
+              onTest={() => void test('image')}
+              canTest={!isNew && draft.image.enabled && !busy}
+            />
 
             {validationError ? <div className="validation-hint">{validationError}</div> : null}
             <div className="dialog-actions"><button type="button" className="btn btn-primary" disabled={busy || Boolean(validationError)} onClick={() => void save()}>{busy ? '处理中…' : '保存配置'}</button></div>
@@ -222,11 +252,91 @@ export function AISettingsDialog(props: Props) {
   );
 }
 
-function CapabilityEditor(props: {
-  title: string; enabled: boolean; onEnabled(value: boolean): void;
-  driver: string; driverOptions: readonly (readonly [string, string])[]; onDriver(value: string): void;
-  endpoint: string; onEndpoint(value: string): void; model: string; onModel(value: string): void;
+/* ── Vision capability editor ── */
+
+function VisionCapabilityEditor(props: {
+  enabled: boolean; onEnabled(value: boolean): void;
+  driver: string; endpoint: string; model: string;
+  compatibility: Draft['vision']['compatibility'];
+  onDriver(value: string): void; onEndpoint(value: string): void; onModel(value: string): void;
+  onCompatibility(patch: Partial<Draft['vision']['compatibility']>): void;
   onTest(): void; canTest: boolean;
 }) {
-  return <fieldset className="capability-editor"><legend>{props.title}</legend><label className="capability-toggle"><input type="checkbox" checked={props.enabled} onChange={(event) => props.onEnabled(event.target.checked)} />启用</label><label className="field">协议<select className="input" value={props.driver} onChange={(event) => props.onDriver(event.target.value)}>{props.driverOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field">接口地址<input className="input" value={props.endpoint} onChange={(event) => props.onEndpoint(event.target.value)} /></label><label className="field">模型<input className="input" maxLength={120} value={props.model} onChange={(event) => props.onModel(event.target.value)} /></label><button type="button" className="btn test-button" disabled={!props.canTest} onClick={props.onTest}>测试连接</button></fieldset>;
+  const [advanced, setAdvanced] = useState(false);
+  return (
+    <fieldset className="capability-editor">
+      <legend>商品分析</legend>
+      <label className="capability-toggle"><input type="checkbox" checked={props.enabled} onChange={(event) => props.onEnabled(event.target.checked)} />启用</label>
+      <label className="field">协议<select className="input" value={props.driver} onChange={(event) => props.onDriver(event.target.value)}><option value="openai-compatible-vision">OpenAI 兼容识图</option></select></label>
+      <label className="field">接口地址<input className="input" value={props.endpoint} onChange={(event) => props.onEndpoint(event.target.value)} /></label>
+      <label className="field">模型<input className="input" maxLength={120} value={props.model} onChange={(event) => props.onModel(event.target.value)} /></label>
+      <button type="button" className="btn test-button" disabled={!props.canTest} onClick={props.onTest}>测试连接</button>
+      <details open={advanced} onToggle={(event) => setAdvanced((event.target as HTMLDetailsElement).open)}>
+        <summary className="advanced-toggle">高级兼容设置</summary>
+        <label className="field">结构化输出
+          <select className="input" value={props.compatibility.structuredOutput} onChange={(event) => props.onCompatibility({ structuredOutput: event.target.value as StructuredOutputMode })}>
+            <option value="auto">自动（推荐）</option>
+            <option value="json-schema">JSON Schema</option>
+            <option value="json-object">JSON Object</option>
+            <option value="text-json">纯 JSON 文本</option>
+          </select>
+        </label>
+        <label className="capability-toggle"><input type="checkbox" checked={props.compatibility.imageInput} onChange={(event) => props.onCompatibility({ imageInput: event.target.checked })} />支持图片输入</label>
+      </details>
+    </fieldset>
+  );
+}
+
+/* ── Image capability editor ── */
+
+function ImageCapabilityEditor(props: {
+  enabled: boolean; onEnabled(value: boolean): void;
+  driver: string; endpoint: string; model: string;
+  compatibility: Draft['image']['compatibility'];
+  onDriver(value: string): void; onEndpoint(value: string): void; onModel(value: string): void;
+  onCompatibility(patch: Partial<Draft['image']['compatibility']>): void;
+  onTest(): void; canTest: boolean;
+}) {
+  const [advanced, setAdvanced] = useState(false);
+  return (
+    <fieldset className="capability-editor">
+      <legend>氛围主图</legend>
+      <label className="capability-toggle"><input type="checkbox" checked={props.enabled} onChange={(event) => props.onEnabled(event.target.checked)} />启用</label>
+      <label className="field">协议<select className="input" value={props.driver} onChange={(event) => props.onDriver(event.target.value)}><option value="dashscope-image">百炼图片</option><option value="volcengine-ark-image">火山方舟图片</option></select></label>
+      <label className="field">接口地址<input className="input" value={props.endpoint} onChange={(event) => props.onEndpoint(event.target.value)} /></label>
+      <label className="field">模型<input className="input" maxLength={120} value={props.model} onChange={(event) => props.onModel(event.target.value)} /></label>
+      <button type="button" className="btn test-button" disabled={!props.canTest} onClick={props.onTest}>测试连接</button>
+      <details open={advanced} onToggle={(event) => setAdvanced((event.target as HTMLDetailsElement).open)}>
+        <summary className="advanced-toggle">高级兼容设置</summary>
+        <label className="capability-toggle"><input type="checkbox" checked={props.compatibility.referenceImage} onChange={(event) => props.onCompatibility({ referenceImage: event.target.checked })} />参考图输入</label>
+        <label className="field">批量生成
+          <select className="input" value={props.compatibility.batchMode} onChange={(event) => props.onCompatibility({ batchMode: event.target.value as ImageBatchMode })}>
+            <option value="auto">自动</option>
+            <option value="native">原生批量</option>
+            <option value="single">单张循环</option>
+          </select>
+        </label>
+        <label className="field">尺寸控制
+          <select className="input" value={props.compatibility.sizeMode} onChange={(event) => props.onCompatibility({ sizeMode: event.target.value as ImageSizeMode })}>
+            <option value="mapped">预设映射</option>
+            <option value="provider-default">服务端默认</option>
+          </select>
+        </label>
+        {props.compatibility.sizeMode === 'mapped' && (
+          <>
+            <label className="field field-compact">1:1 尺寸<input className="input input-compact" value={props.compatibility.sizeByRatio['1:1'] ?? ''} onChange={(event) => props.onCompatibility({ sizeByRatio: { ...props.compatibility.sizeByRatio, '1:1': event.target.value || undefined } })} /></label>
+            <label className="field field-compact">3:4 尺寸<input className="input input-compact" value={props.compatibility.sizeByRatio['3:4'] ?? ''} onChange={(event) => props.onCompatibility({ sizeByRatio: { ...props.compatibility.sizeByRatio, '3:4': event.target.value || undefined } })} /></label>
+            <label className="field field-compact">4:3 尺寸<input className="input input-compact" value={props.compatibility.sizeByRatio['4:3'] ?? ''} onChange={(event) => props.onCompatibility({ sizeByRatio: { ...props.compatibility.sizeByRatio, '4:3': event.target.value || undefined } })} /></label>
+          </>
+        )}
+        <label className="field">提示词扩写
+          <select className="input" value={props.compatibility.promptEnhancement} onChange={(event) => props.onCompatibility({ promptEnhancement: event.target.value as ImagePromptEnhancement })}>
+            <option value="auto">自动</option>
+            <option value="on">开</option>
+            <option value="off">关</option>
+          </select>
+        </label>
+      </details>
+    </fieldset>
+  );
 }

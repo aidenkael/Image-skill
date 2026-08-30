@@ -12,6 +12,19 @@ import type {
   ProductIntelligenceProvider,
 } from './vision-provider';
 import { invalidProviderResponse, providerFetchError, providerHttpError } from './provider-errors';
+import {
+  buildStrictResponseFormat,
+  downgradeMode,
+  extractTextContent,
+  extractResponseUsage,
+  isStructuredOutputUnsupported,
+  normalizeStructuredPayload,
+  parseRawJson,
+  resolveStructuredMode,
+  sanitizeJsonSchema,
+  zodIssues,
+  type StructuredOutputModeResult,
+} from './structured-output';
 
 export const SYSTEM_PROMPT = `You are an ecommerce product photographer and visual merchandising planner.
 Return exactly one object matching the supplied JSON Schema, with no markdown.
@@ -26,23 +39,6 @@ Reference assets may guide visual direction only. They must never appear in fact
 visibleFacts, visibleText and collage text must be evidence-bound.`;
 
 type JsonSchema = Record<string, unknown>;
-
-function supportedSchema(schema: unknown): JsonSchema {
-  const input = schema as JsonSchema;
-  const output: JsonSchema = {};
-  if (typeof input.type === 'string') output.type = input.type;
-  if (typeof input.description === 'string') output.description = input.description;
-  if (Array.isArray(input.enum)) output.enum = input.enum;
-  if (Array.isArray(input.required)) output.required = input.required;
-  if (typeof input.additionalProperties === 'boolean') output.additionalProperties = input.additionalProperties;
-  if (input.items && typeof input.items === 'object') output.items = supportedSchema(input.items);
-  if (input.properties && typeof input.properties === 'object') {
-    output.properties = Object.fromEntries(
-      Object.entries(input.properties as JsonSchema).map(([key, value]) => [key, supportedSchema(value)]),
-    );
-  }
-  return output;
-}
 
 function property(schema: JsonSchema, ...keys: string[]): JsonSchema {
   let current = schema;
@@ -69,19 +65,6 @@ function restrictAssetIds(schema: JsonSchema, assetIds: string[]): void {
 
 function restrictAssetValue(schema: JsonSchema, assetIds: string[]): void {
   schema.enum = assetIds;
-}
-
-export function supportsStrictJsonSchema(model: string): boolean {
-  return /^qwen3\.7-plus(?:-|$)/i.test(model.trim());
-}
-
-/** 从 Zod 契约生成严格 JSON Schema response_format；根层字段全部必填，适配可选字段。 */
-export function strictResponseFormat(name: string, schema: z.ZodType): Record<string, unknown> {
-  const json = supportedSchema(z.toJSONSchema(schema));
-  json.additionalProperties = false;
-  const properties = json.properties as JsonSchema | undefined;
-  if (properties) json.required = Object.keys(properties);
-  return { type: 'json_schema', json_schema: { name, strict: true, schema: json } };
 }
 
 const HUMAN_POLICY_INSTRUCTION: Record<HeroPlanV2Input['humanPolicy'], string> = {
@@ -134,7 +117,7 @@ function reviewHeroInstruction(input: HeroReviewInput): string {
 
 /** Starts from the core Zod contract, then narrows image references to this provider request. */
 export function buildProductIntelligenceJsonSchema(input: ProductIntelligenceInput): JsonSchema {
-  const schema = supportedSchema(z.toJSONSchema(ProductIntelligencePayloadSchema));
+  const schema = sanitizeJsonSchema(z.toJSONSchema(ProductIntelligencePayloadSchema));
   const assetIds = [...new Set(input.assets.map((asset) => asset.assetId))];
 
   restrictAssetIds(property(schema, 'analysis', 'visibleFacts', 'items', 'evidenceAssetIds'), assetIds);
@@ -154,49 +137,18 @@ ${assets}
 Prefer mobile-commerce clarity, truthful visual merchandising, natural commercial photography and low AI-looking scenes.`;
 }
 
-function responseText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const text = (item as { text?: unknown }).text;
-    return typeof text === 'string' ? [text] : [];
-  }).join('');
-}
-
-function responseUsage(body: unknown): unknown {
-  return body && typeof body === 'object' ? (body as { usage?: unknown }).usage : undefined;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error';
-}
-
-function zodIssues(error: unknown): Array<{ path: string; code: string; message: string }> | undefined {
-  if (!(error instanceof z.ZodError)) return undefined;
-  return error.issues.map((issue) => ({ path: issue.path.join('.'), code: issue.code, message: issue.message }));
 }
 
 type LogDetail = Omit<Parameters<typeof writeAILog>[0],
   'requestId' | 'operation' | 'workspaceId' | 'profileId' | 'driver' | 'provider' | 'model' | 'endpoint' | 'durationMs' | 'apiKey' | 'timestamp' | 'assetCount' | 'assetIds'>;
 
-function normalizeStructuredPayload<T extends z.ZodType>(parsed: unknown, schema: T):
-  | { success: true; data: z.output<T>; normalization?: 'single-item-array-unwrapped' }
-  | { success: false; error: z.ZodError } {
-  const direct = schema.safeParse(parsed);
-  if (direct.success) return direct;
-  if (!Array.isArray(parsed) || parsed.length !== 1 || parsed[0] === null || typeof parsed[0] !== 'object' || Array.isArray(parsed[0])) {
-    return { success: false, error: direct.error };
-  }
-  const unwrapped = schema.safeParse(parsed[0]);
-  if (!unwrapped.success) return { success: false, error: unwrapped.error };
-  return { success: true, data: unwrapped.data, normalization: 'single-item-array-unwrapped' };
-}
-
-export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
+export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvider {
   constructor(private readonly config: ResolvedVisionConfig) {}
 
   async analyze(input: ProductIntelligenceInput) {
+    const jsonSchema = buildProductIntelligenceJsonSchema(input);
     return this.requestStructured({
       input,
       operation: 'vision.product-analysis',
@@ -207,9 +159,8 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
         { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${asset.buffer.toString('base64')}` } },
       ]),
       schema: ProductIntelligencePayloadSchema,
-      responseFormat: supportsStrictJsonSchema(this.config.model)
-        ? { type: 'json_schema', json_schema: { name: 'product_intelligence', strict: true, schema: buildProductIntelligenceJsonSchema(input) } }
-        : { type: 'json_object' },
+      schemaName: 'product_intelligence',
+      jsonSchemaOverride: jsonSchema,
     });
   }
 
@@ -228,9 +179,7 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
       user: planningInstruction,
       content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.asset.buffer.toString('base64')}` } }],
       schema: HeroRuntimePlanSchema,
-      responseFormat: supportsStrictJsonSchema(this.config.model)
-        ? { type: 'json_schema', json_schema: { name: 'hero_runtime_plan', strict: true, schema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'], additionalProperties: false } } }
-        : { type: 'json_object' },
+      schemaName: 'hero_runtime_plan',
     });
   }
 
@@ -241,9 +190,7 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
       user: planHeroV2Instruction(input),
       content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.asset.buffer.toString('base64')}` } }],
       schema: HeroPlanV2Schema,
-      responseFormat: supportsStrictJsonSchema(this.config.model)
-        ? strictResponseFormat('hero_plan_v2', HeroPlanV2Schema)
-        : { type: 'json_object' },
+      schemaName: 'hero_plan_v2',
     });
   }
 
@@ -259,9 +206,7 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
         { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.generated.buffer.toString('base64')}` } },
       ],
       schema: HeroReviewSchema,
-      responseFormat: supportsStrictJsonSchema(this.config.model)
-        ? strictResponseFormat('hero_review', HeroReviewSchema)
-        : { type: 'json_object' },
+      schemaName: 'hero_review',
     });
   }
 
@@ -272,9 +217,10 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
     user: string;
     content: Array<Record<string, unknown>>;
     schema: T;
-    responseFormat: Record<string, unknown>;
+    schemaName: string;
+    jsonSchemaOverride?: JsonSchema;
   }): Promise<z.output<T>> {
-    const { input } = options;
+    const { input, schema, schemaName, jsonSchemaOverride } = options;
     const requestId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
     const started = Date.now();
@@ -283,64 +229,115 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
       : 'source' in input
         ? [input.source, input.generated]
         : [input.asset];
-    const log = (event: LogDetail) => writeAILog({
+    const log = (event: LogDetail & { structuredMode?: string; structuredFallback?: string }) => writeAILog({
       ...event, requestId, operation: options.operation, workspaceId: input.workspaceId,
-      profileId: this.config.profileId, driver: this.config.driver, provider: 'aliyun-qwen',
+      profileId: this.config.profileId, driver: this.config.driver, provider: this.config.driver,
       model: this.config.model, endpoint: this.config.endpoint, apiKey: this.config.apiKey,
       timestamp: startedAt, durationMs: Date.now() - started, assetCount: assets.length,
       assetIds: assets.map((asset) => asset.assetId),
     });
-    const content = [...options.content, { type: 'text', text: options.user }];
-    let response: Response;
-    try {
-      response = await fetch(this.config.endpoint, {
-        method: 'POST', headers: { Authorization: `Bearer ${this.config.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.config.model,
-          messages: [
-            ...(options.system ? [{ role: 'system', content: options.system }] : []),
-            { role: 'user', content },
-          ],
-          response_format: options.responseFormat,
-          enable_thinking: false,
-          stream: false,
-        }),
-        signal: AbortSignal.timeout(120_000),
-      });
-    } catch (error) {
-      await log({ status: 'failed', failureStage: 'fetch', errorName: error instanceof Error ? error.name : undefined, errorMessage: errorMessage(error) });
-      throw providerFetchError(error);
-    }
-    const responseRaw = await response.text();
-    if (!response.ok) {
-      await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet: responseRaw });
-      console.error(`[ai] ${options.operation} failed requestId=${requestId.slice(0, 8)}`);
-      throw providerHttpError(response.status);
-    }
-    let body: unknown;
-    try { body = JSON.parse(responseRaw); }
-    catch {
-      await log({ status: 'failed', failureStage: 'response-json', httpStatus: response.status, responseSnippet: responseRaw });
+
+    const structuredMode = this.config.compatibility.structuredOutput;
+    let modeResult = resolveStructuredMode(structuredMode, schemaName, options.schema, jsonSchemaOverride);
+
+    // Auto fallback: attempt with current mode, downgrade on protocol unsupported
+    const maxAttempts = structuredMode === 'auto' ? 3 : 1;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const systemPrompt = [options.system, modeResult.systemSuffix].filter(Boolean).join('\n');
+      const content = [...options.content, { type: 'text', text: options.user }];
+      const body = {
+        model: this.config.model,
+        messages: [
+          ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+          { role: 'user', content },
+        ],
+        ...(modeResult.responseFormat ? { response_format: modeResult.responseFormat } : {}),
+        enable_thinking: false,
+        stream: false,
+      };
+
+      let response: Response;
+      try {
+        response = await fetch(this.config.endpoint, {
+          method: 'POST', headers: { Authorization: `Bearer ${this.config.apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(120_000),
+        });
+      } catch (error) {
+        await log({ status: 'failed', failureStage: 'fetch', errorName: error instanceof Error ? error.name : undefined, errorMessage: errorMessage(error), structuredMode: modeResult.mode });
+        throw providerFetchError(error);
+      }
+
+      const responseRaw = await response.text();
+
+      if (!response.ok) {
+        // Check if this is a structured output format unsupported error (auto mode only)
+        if (structuredMode === 'auto' && isStructuredOutputUnsupported(response.status, responseRaw)) {
+          const nextMode = downgradeMode(modeResult.mode);
+          if (nextMode) {
+            lastError = { status: response.status, body: responseRaw };
+            modeResult = nextMode === 'json-object'
+              ? { mode: 'json-object', responseFormat: { type: 'json_object' }, systemSuffix: 'Return exactly one JSON object strictly matching the supplied schema. Do not add, remove or rename fields.' }
+              : { mode: 'text-json', responseFormat: null, systemSuffix: 'Return ONLY raw JSON. No markdown, no explanation, no surrounding text.' };
+            await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet: responseRaw, structuredMode: modeResult.mode, structuredFallback: nextMode });
+            continue;
+          }
+        }
+        await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet: responseRaw, structuredMode: modeResult.mode });
+        console.error(`[ai] ${options.operation} failed requestId=${requestId.slice(0, 8)}`);
+        throw providerHttpError(response.status);
+      }
+
+      // HTTP OK - parse and validate
+      let parsedBody: unknown;
+      try { parsedBody = JSON.parse(responseRaw); }
+      catch {
+        await log({ status: 'failed', failureStage: 'response-json', httpStatus: response.status, responseSnippet: responseRaw, structuredMode: modeResult.mode });
+        throw invalidProviderResponse(requestId);
+      }
+      const choices = (parsedBody as { choices?: Array<{ message?: { content?: unknown } }> })?.choices;
+      const raw = extractTextContent(choices?.[0]?.message?.content).trim();
+      if (!raw) {
+        await log({ status: 'failed', failureStage: 'content-extract', httpStatus: response.status, usage: extractResponseUsage(parsedBody), structuredMode: modeResult.mode });
+        throw invalidProviderResponse(requestId);
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = modeResult.mode === 'text-json' ? parseRawJson(raw) : JSON.parse(raw);
+      } catch {
+        await log({ status: 'failed', failureStage: 'content-json-parse', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, structuredMode: modeResult.mode });
+        throw invalidProviderResponse(requestId);
+      }
+
+      const normalized = normalizeStructuredPayload(parsed, schema);
+      if (normalized.success) {
+        await log({ status: 'succeeded', httpStatus: response.status, usage: extractResponseUsage(parsedBody), normalization: normalized.normalization, structuredMode: modeResult.mode });
+        return normalized.data;
+      }
+
+      // Schema validation failed — allow one retry with downgraded mode (auto only)
+      if (structuredMode === 'auto' && attempt === 0) {
+        const nextMode = downgradeMode(modeResult.mode);
+        if (nextMode) {
+          modeResult = nextMode === 'json-object'
+            ? { mode: 'json-object', responseFormat: { type: 'json_object' }, systemSuffix: 'Return exactly one JSON object strictly matching the supplied schema. Do not add, remove or rename fields.' }
+            : { mode: 'text-json', responseFormat: null, systemSuffix: 'Return ONLY raw JSON. No markdown, no explanation, no surrounding text.' };
+          await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, zodIssues: zodIssues(normalized.error), structuredMode: modeResult.mode, structuredFallback: 'schema-retry' });
+          continue;
+        }
+      }
+
+      await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, zodIssues: zodIssues(normalized.error), structuredMode: modeResult.mode });
       throw invalidProviderResponse(requestId);
     }
-    const choices = (body as { choices?: Array<{ message?: { content?: unknown } }> })?.choices;
-    const raw = responseText(choices?.[0]?.message?.content).trim();
-    if (!raw) {
-      await log({ status: 'failed', failureStage: 'content-extract', httpStatus: response.status, usage: responseUsage(body) });
-      throw invalidProviderResponse(requestId);
+
+    // Exhausted fallback attempts
+    if (lastError && typeof lastError === 'object' && 'status' in lastError) {
+      throw providerHttpError((lastError as { status: number }).status);
     }
-    let parsed: unknown;
-    try { parsed = JSON.parse(raw); }
-    catch {
-      await log({ status: 'failed', failureStage: 'content-json-parse', httpStatus: response.status, usage: responseUsage(body), responseSnippet: raw });
-      throw invalidProviderResponse(requestId);
-    }
-    const normalized = normalizeStructuredPayload(parsed, options.schema);
-    if (normalized.success) {
-      await log({ status: 'succeeded', httpStatus: response.status, usage: responseUsage(body), normalization: normalized.normalization });
-      return normalized.data;
-    }
-    await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: responseUsage(body), responseSnippet: raw, zodIssues: zodIssues(normalized.error) });
     throw invalidProviderResponse(requestId);
   }
 }

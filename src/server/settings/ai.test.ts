@@ -12,6 +12,8 @@ import {
   maskApiKey,
   resolveActiveImageConfig,
   resolveActiveVisionConfig,
+  resolveProfileImageConfig,
+  resolveProfileVisionConfig,
   setActiveAIProfiles,
   updateAIProfile,
 } from './ai';
@@ -124,5 +126,113 @@ describe('一次迁移与环境启动兼容', () => {
     settings = await deleteAIProfile(settings.profiles[0].id);
     expect(settings.profiles).toHaveLength(0);
     expect((await getAISettingsPublic()).profiles).toHaveLength(0);
+  });
+});
+
+describe('v1 → v2 配置迁移', () => {
+  it('v1 配置自动迁移为 v2，保留所有 API Key、active ids、model、endpoint', async () => {
+    const profileId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const now = '2026-08-28T00:00:00.000Z';
+    const v1Store = {
+      schemaVersion: 1,
+      profiles: [{
+        id: profileId,
+        name: '旧配置',
+        preset: 'aliyun-qwen',
+        apiKey: 'sk-legacy-secret-key',
+        vision: {
+          enabled: true,
+          driver: 'openai-compatible-vision',
+          endpoint: 'https://old-vision.example/chat',
+          model: 'old-vision-model',
+        },
+        image: {
+          enabled: true,
+          driver: 'dashscope-qwen-image',
+          endpoint: 'https://old-image.example/generate',
+          model: 'old-image-model',
+        },
+        createdAt: now,
+        updatedAt: now,
+      }],
+      activeVisionProfileId: profileId,
+      activeImageProfileId: profileId,
+    };
+    await writeJson(runtimePath('settings', 'ai-profiles.json'), v1Store);
+
+    const settings = await getAISettingsPublic();
+    expect(settings.profiles).toHaveLength(1);
+    const profile = settings.profiles[0];
+    expect(profile.id).toBe(profileId);
+    expect(profile.name).toBe('旧配置');
+    expect(profile.preset).toBe('aliyun-qwen');
+    expect(profile.vision.model).toBe('old-vision-model');
+    expect(profile.image.driver).toBe('dashscope-image'); // migrated
+    expect(profile.image.model).toBe('old-image-model');
+    expect(profile.vision.compatibility).toEqual({ imageInput: true, structuredOutput: 'auto' });
+    expect(profile.image.compatibility).toMatchObject({
+      referenceImage: true, batchMode: 'native', sizeMode: 'mapped',
+    });
+    expect(settings.activeVisionProfileId).toBe(profileId);
+    expect(settings.activeImageProfileId).toBe(profileId);
+
+    // Verify the file was written as v2
+    const stored = await import('node:fs/promises').then((fs) => fs.readFile(runtimePath('settings', 'ai-profiles.json'), 'utf8')).then(JSON.parse);
+    expect(stored.schemaVersion).toBe(2);
+
+    // API Key preserved
+    expect((await resolveActiveVisionConfig()).apiKey).toBe('sk-legacy-secret-key');
+    expect((await resolveActiveImageConfig()).apiKey).toBe('sk-legacy-secret-key');
+  });
+
+  it('v1 dashscope-qwen-image driver 迁移为 dashscope-image', async () => {
+    const profileId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const now = '2026-08-28T00:00:00.000Z';
+    const v1Store = {
+      schemaVersion: 1,
+      profiles: [{
+        id: profileId, name: '迁移测试', preset: 'aliyun-qwen', apiKey: 'sk-migrate-test-123',
+        vision: { enabled: false, driver: 'openai-compatible-vision', endpoint: 'https://v.example/chat', model: 'm1' },
+        image: { enabled: true, driver: 'dashscope-qwen-image', endpoint: 'https://i.example/gen', model: 'm2' },
+        createdAt: now, updatedAt: now,
+      }],
+      activeVisionProfileId: null,
+      activeImageProfileId: profileId,
+    };
+    await writeJson(runtimePath('settings', 'ai-profiles.json'), v1Store);
+    const settings = await getAISettingsPublic();
+    expect(settings.profiles[0].image.driver).toBe('dashscope-image');
+  });
+
+  it('compatibility 默认来自 driver/preset，model 可为任意字符串', async () => {
+    const profileId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const now = '2026-08-28T00:00:00.000Z';
+    const v1Store = {
+      schemaVersion: 1,
+      profiles: [{
+        id: profileId, name: '未来模型', preset: 'custom', apiKey: 'sk-future-model-1',
+        vision: { enabled: true, driver: 'openai-compatible-vision', endpoint: 'https://v.example/chat', model: 'future-vision-model-2099' },
+        image: { enabled: true, driver: 'dashscope-qwen-image', endpoint: 'https://i.example/gen', model: 'future-image-model-2099' },
+        createdAt: now, updatedAt: now,
+      }],
+      activeVisionProfileId: profileId,
+      activeImageProfileId: profileId,
+    };
+    await writeJson(runtimePath('settings', 'ai-profiles.json'), v1Store);
+    const settings = await getAISettingsPublic();
+    expect(settings.profiles[0].vision.model).toBe('future-vision-model-2099');
+    expect(settings.profiles[0].image.model).toBe('future-image-model-2099');
+    // Compatibility came from driver/preset, not model name
+    expect(settings.profiles[0].vision.compatibility).toEqual({ imageInput: true, structuredOutput: 'auto' });
+    expect(settings.profiles[0].image.compatibility.sizeMode).toBe('mapped');
+
+    // Config resolves correctly regardless of model name
+    const visionConfig = await resolveProfileVisionConfig(profileId);
+    expect(visionConfig.model).toBe('future-vision-model-2099');
+    expect(visionConfig.compatibility.structuredOutput).toBe('auto');
+
+    const imageConfig = await resolveProfileImageConfig(profileId);
+    expect(imageConfig.model).toBe('future-image-model-2099');
+    expect(imageConfig.compatibility.referenceImage).toBe(true);
   });
 });

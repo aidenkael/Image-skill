@@ -29,8 +29,8 @@ function request(method: string, body: unknown) {
 function input(name: string, apiKey?: string) {
   return {
     name, preset: 'custom', apiKey,
-    vision: { enabled: true, driver: 'openai-compatible-vision', endpoint: 'https://vision.example/v1', model: 'vision' },
-    image: { enabled: true, driver: 'volcengine-ark-image', endpoint: 'https://image.example/v1', model: 'image' },
+    vision: { enabled: true, driver: 'openai-compatible-vision', endpoint: 'https://vision.example/v1', model: 'vision', compatibility: { imageInput: true, structuredOutput: 'auto' } },
+    image: { enabled: true, driver: 'volcengine-ark-image', endpoint: 'https://image.example/v1', model: 'image', compatibility: { referenceImage: true, batchMode: 'single', sizeMode: 'mapped', sizeByRatio: { '1:1': '2048x2048', '3:4': '1536x2048', '4:3': '2048x1536' }, promptEnhancement: 'off' } },
   };
 }
 

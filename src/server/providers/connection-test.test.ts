@@ -9,11 +9,12 @@ vi.mock('@/server/settings/ai', async (original) => ({
 }));
 import { testProfileConnection } from './connection-test';
 
+const baseVisionCompat = { imageInput: true, structuredOutput: 'auto' as const };
 const config = { profileId: 'p', apiKey: 'secret-key', enabled: true, driver: 'volcengine-ark-image', endpoint: 'https://ark.example', model: 'model-a' };
 const probeColor = (['RED', 'GREEN', 'BLUE'] as const)[crypto.createHash('sha256').update('p').digest()[0] % 3];
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
-describe('连接测试', () => {
+describe('连接测试（不做 model allowlist）', () => {
   it('图片测试仅发送非生成 model 探针', async () => {
     imageConfig.mockResolvedValue(config);
     let body: unknown;
@@ -26,7 +27,7 @@ describe('连接测试', () => {
   });
 
   it('识图测试发送真实 256x256 图片和颜色问题，仅正确答案成功', async () => {
-    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision' });
+    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision', compatibility: baseVisionCompat });
     let body: Record<string, unknown> = {};
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       body = JSON.parse(String(init.body));
@@ -41,7 +42,7 @@ describe('连接测试', () => {
   });
 
   it('识图答案错误或 400 均不视为成功', async () => {
-    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision' });
+    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision', compatibility: baseVisionCompat });
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: 'PURPLE' } }] })));
     await expect(testProfileConnection('p', 'vision')).rejects.toThrow('模型未通过识图测试');
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: { message: 'invalid request' } }, { status: 400 })));
@@ -49,16 +50,23 @@ describe('连接测试', () => {
   });
 
   it.each([[401, '认证失败'], [403, '认证失败'], [404, '接口地址不可用'], [500, '服务暂时不可用']])('%s 映射为 %s', async (status, message) => {
-    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision' });
+    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision', compatibility: baseVisionCompat });
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status })));
     await expect(testProfileConnection('p', 'vision')).rejects.toThrow(message);
   });
 
   it('无效模型不被任意 400 误判成功，网络错误为地址不可用', async () => {
-    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision' });
+    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision', compatibility: baseVisionCompat });
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: { message: 'model not found' } }, { status: 400 })));
     await expect(testProfileConnection('p', 'vision')).rejects.toThrow('模型配置不可用');
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network'); }));
     await expect(testProfileConnection('p', 'vision')).rejects.toThrow('接口地址不可用');
+  });
+
+  it('compatibility.imageInput=false 直接拒绝', async () => {
+    visionConfig.mockResolvedValue({ ...config, driver: 'openai-compatible-vision', compatibility: { imageInput: false, structuredOutput: 'auto' } });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: probeColor } }] })));
+    await expect(testProfileConnection('p', 'vision')).rejects.toThrow(/不支持图片输入/);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 });

@@ -36,7 +36,10 @@ V1 产品方向以本文为准；仓库内 `legacy/` 目录为历史研究资料
 ## 必须遵守
 
 - 优先复用成熟高星开源依赖；优先国内可访问的 Provider。
-- 模型接口可替换（不写死单一 Provider；通过 `ImageProvider` 边界扩展）。
+- 模型 ID 是 opaque config；运行时能力不得通过模型名推断。
+- AI 接入按「协议 adapter + 显式/自动 capability」扩展。
+- 同协议新模型只改配置；新协议只新增 provider adapter，不修改 Hero/Product Intelligence 业务层。
+- VisionProvider 与 ImageProvider 均遵守该边界。
 - 工作台 AI Provider 由服务端 `.runtime/settings/ai-profiles.json` 配置中心管理；商品分析与氛围主图可分别选择不同配置。
 - API Key 始终仅限服务端；不得暴露到浏览器存储或 Git。
 - Provider 预设只是默认值，用户可编辑 endpoint/model；不得根据 Key 前缀自动切换 Token Plan 或其他端点。

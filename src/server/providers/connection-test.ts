@@ -69,6 +69,10 @@ export async function testProfileConnection(
     if (error instanceof AISettingsValidationError) throw error;
     throw new AIConnectionTestError('连接失败');
   }
+  // Vision capability: reject if imageInput is false
+  if (capability === 'vision' && !(config as { compatibility?: { imageInput?: boolean } }).compatibility?.imageInput) {
+    throw new AIConnectionTestError('当前商品分析配置不支持图片输入，无法用于商品分析。');
+  }
   const log = (event: Omit<Parameters<typeof writeAILog>[0], 'requestId' | 'operation' | 'profileId' | 'driver' | 'model' | 'endpoint' | 'durationMs' | 'apiKey'>) => writeAILog({
     ...event, requestId, operation, profileId, driver: config.driver, provider: config.driver,
     model: config.model, endpoint: config.endpoint, apiKey: config.apiKey, durationMs: Date.now() - started,

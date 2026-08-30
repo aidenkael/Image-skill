@@ -6,19 +6,24 @@ import {
   AIProfileInputSchema,
   AIProfilePublicSchema,
   AISettingsPublicSchema,
-  ImageCapabilitySchema,
+  ImageCompatibilitySchema,
   LEGACY_ALIYUN_IMAGE_ENDPOINT,
+  VisionCompatibilitySchema,
   VisionCapabilitySchema,
+  ImageCapabilitySchema,
   ALIYUN_VISION_ENDPOINT,
   type AIProfileInput,
   type AIProfilePublic,
   type AISettingsPublic,
   type ImageCapability,
   type VisionCapability,
+  type AIProfilePreset,
 } from '@/core/system';
 import { readJson, runtimePath, writeJson } from '@/server/storage/fs-store';
 
-const PersistedAIProfileSchema = z.object({
+/* ── v2 persisted schemas ── */
+
+const PersistedAIProfileV2Schema = z.object({
   id: z.string().uuid(),
   name: z.string().trim().min(1).max(60),
   preset: z.enum(['aliyun-qwen', 'volcengine-ark', 'custom']),
@@ -28,16 +33,48 @@ const PersistedAIProfileSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
-const PersistedAISettingsSchema = z.object({
+const PersistedAISettingsV2Schema = z.object({
+  schemaVersion: z.literal(2),
+  profiles: z.array(PersistedAIProfileV2Schema),
+  activeVisionProfileId: z.string().uuid().nullable(),
+  activeImageProfileId: z.string().uuid().nullable(),
+});
+
+/* ── v1 persisted schemas (for migration) ── */
+
+const LegacyVisionCapabilitySchema = z.object({
+  enabled: z.boolean(),
+  driver: z.enum(['openai-compatible-vision']),
+  endpoint: z.string().trim().url(),
+  model: z.string().trim().min(1).max(120),
+});
+const LegacyImageDriverSchema = z.enum(['dashscope-qwen-image', 'volcengine-ark-image', 'dashscope-image']);
+const LegacyImageCapabilitySchema = z.object({
+  enabled: z.boolean(),
+  driver: LegacyImageDriverSchema,
+  endpoint: z.string().trim().url(),
+  model: z.string().trim().min(1).max(120),
+});
+const PersistedAIProfileV1Schema = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(60),
+  preset: z.enum(['aliyun-qwen', 'volcengine-ark', 'custom']),
+  apiKey: z.string().trim().min(8).max(500),
+  vision: LegacyVisionCapabilitySchema,
+  image: LegacyImageCapabilitySchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+const PersistedAISettingsV1Schema = z.object({
   schemaVersion: z.literal(1),
-  profiles: z.array(PersistedAIProfileSchema),
+  profiles: z.array(PersistedAIProfileV1Schema),
   activeVisionProfileId: z.string().uuid().nullable(),
   activeImageProfileId: z.string().uuid().nullable(),
 });
 const LegacyAISettingsSchema = z.object({ apiKey: z.string().trim().min(8).max(500) });
 
-type PersistedAIProfile = z.infer<typeof PersistedAIProfileSchema>;
-type PersistedAISettings = z.infer<typeof PersistedAISettingsSchema>;
+type PersistedAIProfile = z.infer<typeof PersistedAIProfileV2Schema>;
+type PersistedAISettings = z.infer<typeof PersistedAISettingsV2Schema>;
 
 const profileSettingsFile = () => runtimePath('settings', 'ai-profiles.json');
 const legacySettingsFile = () => runtimePath('settings', 'ai.json');
@@ -57,18 +94,89 @@ async function fileExists(filePath: string): Promise<boolean> {
   try { await fs.access(filePath); return true; } catch { return false; }
 }
 
+/* ── v1 → v2 migration ── */
+
+function defaultVisionCompatibility(): z.infer<typeof VisionCompatibilitySchema> {
+  return { imageInput: true, structuredOutput: 'auto' };
+}
+
+function defaultImageCompatibilityForDriver(
+  driver: string,
+  preset: AIProfilePreset,
+): z.infer<typeof ImageCompatibilitySchema> {
+  if (driver === 'volcengine-ark-image') {
+    return {
+      referenceImage: true, batchMode: 'single', sizeMode: 'mapped',
+      sizeByRatio: { '1:1': '2048x2048', '3:4': '1536x2048', '4:3': '2048x1536' },
+      promptEnhancement: 'off',
+    };
+  }
+  // dashscope-image (migrated from dashscope-qwen-image)
+  return {
+    referenceImage: true, batchMode: 'native', sizeMode: 'mapped',
+    sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' },
+    promptEnhancement: 'auto',
+  };
+}
+
+function migrateV1Profile(profile: z.infer<typeof PersistedAIProfileV1Schema>): PersistedAIProfile {
+  const imageDriver = profile.image.driver === 'dashscope-qwen-image'
+    ? 'dashscope-image'
+    : profile.image.driver;
+  return {
+    id: profile.id,
+    name: profile.name,
+    preset: profile.preset,
+    apiKey: profile.apiKey,
+    vision: {
+      ...profile.vision,
+      compatibility: defaultVisionCompatibility(),
+    },
+    image: {
+      ...profile.image,
+      driver: imageDriver as 'dashscope-image' | 'volcengine-ark-image',
+      compatibility: defaultImageCompatibilityForDriver(imageDriver, profile.preset),
+    },
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function migrateV1ToV2(v1: z.infer<typeof PersistedAISettingsV1Schema>): PersistedAISettings {
+  return {
+    schemaVersion: 2,
+    profiles: v1.profiles.map(migrateV1Profile),
+    activeVisionProfileId: v1.activeVisionProfileId,
+    activeImageProfileId: v1.activeImageProfileId,
+  };
+}
+
+/* ── bootstrap ── */
+
 async function bootstrapStore(): Promise<PersistedAISettings> {
   const storePath = profileSettingsFile();
   if (await fileExists(storePath)) {
-    const parsed = PersistedAISettingsSchema.safeParse(await readJson<unknown>(storePath));
-    if (!parsed.success) throw new AISettingsValidationError('AI 配置文件损坏或格式不合法');
-    return parsed.data;
+    const raw = await readJson<unknown>(storePath);
+
+    // Try v2 first
+    const v2 = PersistedAISettingsV2Schema.safeParse(raw);
+    if (v2.success) return v2.data;
+
+    // Try v1 → migrate
+    const v1 = PersistedAISettingsV1Schema.safeParse(raw);
+    if (v1.success) {
+      const migrated = migrateV1ToV2(v1.data);
+      await writeJson(storePath, migrated);
+      return migrated;
+    }
+
+    throw new AISettingsValidationError('AI 配置文件损坏或格式不合法');
   }
 
   const legacy = LegacyAISettingsSchema.safeParse(await readJson<unknown>(legacySettingsFile()));
   const apiKey = legacy.success ? legacy.data.apiKey : process.env.DASHSCOPE_API_KEY?.trim();
   let store: PersistedAISettings = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     profiles: [],
     activeVisionProfileId: null,
     activeImageProfileId: null,
@@ -76,8 +184,9 @@ async function bootstrapStore(): Promise<PersistedAISettings> {
   if (apiKey) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const imageDriver = 'dashscope-image' as const;
     store = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       profiles: [{
         id,
         name: '现有百炼配置',
@@ -88,12 +197,14 @@ async function bootstrapStore(): Promise<PersistedAISettings> {
           driver: 'openai-compatible-vision',
           endpoint: process.env.DASHSCOPE_VISION_API_URL?.trim() || ALIYUN_VISION_ENDPOINT,
           model: 'qwen3.7-plus',
+          compatibility: defaultVisionCompatibility(),
         },
         image: {
           enabled: true,
-          driver: 'dashscope-qwen-image',
+          driver: imageDriver,
           endpoint: process.env.DASHSCOPE_API_URL?.trim() || LEGACY_ALIYUN_IMAGE_ENDPOINT,
           model: 'qwen-image-3.0-pro',
+          compatibility: defaultImageCompatibilityForDriver(imageDriver, 'aliyun-qwen'),
         },
         createdAt: now,
         updatedAt: now,
@@ -102,7 +213,7 @@ async function bootstrapStore(): Promise<PersistedAISettings> {
       activeImageProfileId: id,
     };
   }
-  const parsed = PersistedAISettingsSchema.safeParse(store);
+  const parsed = PersistedAISettingsV2Schema.safeParse(store);
   if (!parsed.success) throw new AISettingsValidationError(validationMessage(parsed.error));
   await writeJson(storePath, parsed.data);
   if (legacy.success) await fs.rm(legacySettingsFile(), { force: true });
@@ -164,7 +275,7 @@ export async function createAIProfile(raw: unknown): Promise<AISettingsPublic> {
     const store = await bootstrapStore();
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    const profile = PersistedAIProfileSchema.parse({ ...input, id, createdAt: now, updatedAt: now });
+    const profile = PersistedAIProfileV2Schema.parse({ ...input, id, createdAt: now, updatedAt: now });
     store.profiles.push(profile);
     if (profile.vision.enabled && store.activeVisionProfileId === null) store.activeVisionProfileId = id;
     if (profile.image.enabled && store.activeImageProfileId === null) store.activeImageProfileId = id;
@@ -178,7 +289,7 @@ export async function updateAIProfile(profileId: string, raw: unknown): Promise<
     const input = parseProfileInput(raw);
     const store = await bootstrapStore();
     const existing = findProfile(store, profileId);
-    const updated = PersistedAIProfileSchema.parse({
+    const updated = PersistedAIProfileV2Schema.parse({
       ...existing,
       ...input,
       apiKey: input.apiKey || existing.apiKey,
