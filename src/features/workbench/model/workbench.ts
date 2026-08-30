@@ -184,6 +184,22 @@ export function sourceIdAfterRoleChange(
   return role === 'reference' && sourceAssetId === changedAssetId ? '' : sourceAssetId;
 }
 
+/**
+ * 判断素材角色变更是否应当使当前 Hero 方案失效。
+ * 仅当被修改的素材恰好是当前 Hero 源、且角色真正发生变化时，方案才失效。
+ */
+export function shouldInvalidateHeroPlanForRoleChange(
+  heroSourceAssetId: string,
+  changedAssetId: string,
+  previousRole: AssetRole | undefined,
+  nextRole: AssetRole,
+): boolean {
+  return (
+    heroSourceAssetId === changedAssetId &&
+    previousRole !== nextRole
+  );
+}
+
 export function sanitizeCollageVariants(
   variants: TemplateDocument[],
   assets: AssetRef[],
@@ -464,8 +480,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
         if (newSourceId !== current.sourceAssetId) {
           next.sourceAssetId = newSourceId;
         }
-        // role 实际变化 => 当前 HeroPlan 立即失效
-        if (updated.role !== previousRole) {
+        // 仅当当前 Hero 源素材角色真正变化时，HeroPlan 才失效
+        if (shouldInvalidateHeroPlanForRoleChange(current.sourceAssetId, id, previousRole, updated.role)) {
           delete next.planId;
           setHeroPlan(null);
         }

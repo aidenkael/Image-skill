@@ -12,6 +12,7 @@ import {
   resolveActiveCollageVariant,
   restoreSelectedAssetIds,
   sanitizeCollageVariants,
+  shouldInvalidateHeroPlanForRoleChange,
   sourceIdAfterRoleChange,
   OrderedDraftWriter,
 } from './workbench';
@@ -308,5 +309,40 @@ describe('heroPlanInputChanged：Hero 策划输入变化检测', () => {
 
   it('非 Hero source 素材的 patch（不包含策划输入键） => 不失效', () => {
     expect(heroPlanInputChanged(baseOptions, {})).toBe(false);
+  });
+});
+
+describe('shouldInvalidateHeroPlanForRoleChange：源素材角色变更失效判定', () => {
+  const ASSET_A = 'asset-A';
+  const ASSET_B = 'asset-B';
+
+  it('Hero 源素材角色变更 front -> detail => 失效（true）', () => {
+    expect(
+      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_A, 'front', 'detail'),
+    ).toBe(true);
+  });
+
+  it('Hero 源素材角色变更 detail -> reference => 失效（true）', () => {
+    expect(
+      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_A, 'detail', 'reference'),
+    ).toBe(true);
+  });
+
+  it('非 Hero 源素材角色变更 front -> detail => 不失效（false）', () => {
+    expect(
+      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_B, 'front', 'detail'),
+    ).toBe(false);
+  });
+
+  it('非 Hero 源素材角色变更 detail -> reference => 不失效（false）', () => {
+    expect(
+      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_B, 'detail', 'reference'),
+    ).toBe(false);
+  });
+
+  it('Hero 源素材角色未变 front -> front => 不失效（false）', () => {
+    expect(
+      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_A, 'front', 'front'),
+    ).toBe(false);
   });
 });
