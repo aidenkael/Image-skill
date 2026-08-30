@@ -52,16 +52,70 @@ describe('AI Provider 预设', () => {
   });
 
   it('compatibility 字段缺失时 schema 拒绝', () => {
-    const visionNoCompat = {
-      enabled: true, driver: 'openai-compatible-vision',
-      endpoint: 'https://vision.example', model: 'some-model',
-    };
+    const visionDefaults = profileDefaults('aliyun-qwen').vision;
     const imageDefaults = profileDefaults('aliyun-qwen').image;
     const result = AIProfileInputSchema.safeParse({
       name: '缺字段', preset: 'custom', apiKey: 'sk-12345678',
-      vision: visionNoCompat,
+      vision: {
+        enabled: true, driver: 'openai-compatible-vision',
+        endpoint: 'https://vision.example', model: 'some-model',
+      },
       image: imageDefaults,
     });
     expect(result.success).toBe(false);
+  });
+
+  it('mapped 三个 ratio 完整 → valid', () => {
+    const imageDefaults = {
+      enabled: true, driver: 'dashscope-image' as const, endpoint: 'https://img.example',
+      model: 'test-model',
+      compatibility: {
+        referenceImage: true, batchMode: 'single' as const, sizeMode: 'mapped' as const,
+        sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344', '4:3': '1344*768' },
+        promptEnhancement: 'auto' as const,
+      },
+    };
+    const result = AIProfileInputSchema.safeParse({
+      name: '完整映射', preset: 'custom', apiKey: 'sk-12345678',
+      vision: { enabled: false, driver: 'openai-compatible-vision', endpoint: 'https://v.example', model: 'm', compatibility: { imageInput: false, structuredOutput: 'auto' } },
+      image: imageDefaults,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('mapped 缺任一 ratio → invalid', () => {
+    const imageDefaults = {
+      enabled: true, driver: 'dashscope-image' as const, endpoint: 'https://img.example',
+      model: 'test-model',
+      compatibility: {
+        referenceImage: true, batchMode: 'single' as const, sizeMode: 'mapped' as const,
+        sizeByRatio: { '1:1': '1024*1024', '3:4': '768*1344' }, // 缺少 4:3
+        promptEnhancement: 'auto' as const,
+      },
+    };
+    const result = AIProfileInputSchema.safeParse({
+      name: '不完整映射', preset: 'custom', apiKey: 'sk-12345678',
+      vision: { enabled: false, driver: 'openai-compatible-vision', endpoint: 'https://v.example', model: 'm', compatibility: { imageInput: false, structuredOutput: 'auto' } },
+      image: imageDefaults,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('provider-default 可无映射 → valid', () => {
+    const imageDefaults = {
+      enabled: true, driver: 'dashscope-image' as const, endpoint: 'https://img.example',
+      model: 'test-model',
+      compatibility: {
+        referenceImage: true, batchMode: 'single' as const, sizeMode: 'provider-default' as const,
+        sizeByRatio: {},
+        promptEnhancement: 'off' as const,
+      },
+    };
+    const result = AIProfileInputSchema.safeParse({
+      name: '默认尺寸', preset: 'custom', apiKey: 'sk-12345678',
+      vision: { enabled: false, driver: 'openai-compatible-vision', endpoint: 'https://v.example', model: 'm', compatibility: { imageInput: false, structuredOutput: 'auto' } },
+      image: imageDefaults,
+    });
+    expect(result.success).toBe(true);
   });
 });

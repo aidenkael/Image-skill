@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ResolvedImageConfig } from '@/server/settings/ai';
 import { VolcengineArkImageProvider } from './volcengine-ark-image';
+import { ProviderConfigError } from './provider-errors';
 
 let root = '';
 let imagePath = '';
@@ -32,7 +33,7 @@ afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
 describe('Volcengine Ark 图片 Provider（模型无关）', () => {
-  it('count=3 执行三次独立单图请求并返回三个 URL', async () => {
+  it('batchMode=single count=3 执行三次独立单图请求并返回三个 URL', async () => {
     const calls: Array<{ url: string; auth: string; body: Record<string, unknown> }> = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body));
@@ -55,6 +56,91 @@ describe('Volcengine Ark 图片 Provider（模型无关）', () => {
     }
   });
 
+  it('batchMode=auto 使用 single（Ark 无原生批量）', async () => {
+    const autoConfig = { ...config, compatibility: { ...config.compatibility, batchMode: 'auto' as const } };
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      return Response.json({ data: [{ url: `https://cdn.example/${callCount}.png` }] });
+    }));
+    const result = await new VolcengineArkImageProvider(autoConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 2 });
+    expect(result).toHaveLength(2);
+    expect(callCount).toBe(2);
+  });
+
+  it('batchMode=native 请求前失败', async () => {
+    const nativeConfig = { ...config, compatibility: { ...config.compatibility, batchMode: 'native' as const } };
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] })));
+    await expect(new VolcengineArkImageProvider(nativeConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 }))
+      .rejects.toThrow(ProviderConfigError);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('promptEnhancement=off 正常', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] });
+    }));
+    await new VolcengineArkImageProvider(config).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
+    // prompt_extend should not be in the body
+    expect(captured).not.toHaveProperty('prompt_extend');
+  });
+
+  it('promptEnhancement=auto 按 off 处理（不发送任何扩写参数）', async () => {
+    const autoConfig = { ...config, compatibility: { ...config.compatibility, promptEnhancement: 'auto' as const } };
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] });
+    }));
+    await new VolcengineArkImageProvider(autoConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
+    expect(captured).not.toHaveProperty('prompt_extend');
+  });
+
+  it('promptEnhancement=on 请求前失败', async () => {
+    const onConfig = { ...config, compatibility: { ...config.compatibility, promptEnhancement: 'on' as const } };
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] })));
+    await expect(new VolcengineArkImageProvider(onConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 }))
+      .rejects.toThrow(ProviderConfigError);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('mapped size 从配置读取', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] });
+    }));
+    await new VolcengineArkImageProvider(config).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
+    expect(captured.size).toBe('2048x2048');
+  });
+
+  it('mapped ratio 缺失请求前失败', async () => {
+    const missingRatioConfig = {
+      ...config,
+      compatibility: {
+        ...config.compatibility,
+        sizeByRatio: { '1:1': '2048x2048', '3:4': '1536x2048' }, // 缺少 4:3
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] })));
+    await expect(new VolcengineArkImageProvider(missingRatioConfig).generate({ imagePath, prompt: 'hero', ratio: '4:3', count: 1 }))
+      .rejects.toThrow(ProviderConfigError);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('provider-default 不发 size', async () => {
+    const noSizeConfig = { ...config, compatibility: { ...config.compatibility, sizeMode: 'provider-default' as const } };
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] });
+    }));
+    await new VolcengineArkImageProvider(noSizeConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
+    expect(captured.size).toBeUndefined();
+  });
+
   it('任一请求失败则整体失败', async () => {
     let call = 0;
     vi.stubGlobal('fetch', vi.fn(async () => {
@@ -75,28 +161,6 @@ describe('Volcengine Ark 图片 Provider（模型无关）', () => {
     await new VolcengineArkImageProvider(futureConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
     expect(captured.model).toBe('future-ark-model-2099');
     expect(captured.size).toBe('2048x2048');
-  });
-
-  it('size 来自配置而非硬编码函数', async () => {
-    const customSizeConfig = { ...config, compatibility: { ...config.compatibility, sizeByRatio: { '1:1': '4096x4096', '3:4': '3072x4096', '4:3': '4096x3072' } } };
-    let captured: Record<string, unknown> = {};
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
-      captured = JSON.parse(String(init.body));
-      return Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] });
-    }));
-    await new VolcengineArkImageProvider(customSizeConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
-    expect(captured.size).toBe('4096x4096');
-  });
-
-  it('provider-default 不发送 size', async () => {
-    const noSizeConfig = { ...config, compatibility: { ...config.compatibility, sizeMode: 'provider-default' as const } };
-    let captured: Record<string, unknown> = {};
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
-      captured = JSON.parse(String(init.body));
-      return Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] });
-    }));
-    await new VolcengineArkImageProvider(noSizeConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 });
-    expect(captured.size).toBeUndefined();
   });
 
   it('referenceImage=false 在请求前失败', async () => {

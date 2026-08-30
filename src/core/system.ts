@@ -87,6 +87,16 @@ export const AIProfileInputSchema = z.object({
       message: '请将接口地址中的 {WorkspaceId} 替换为百炼工作空间 ID',
     });
   }
+  if (profile.image.compatibility.sizeMode === 'mapped') {
+    const m = profile.image.compatibility.sizeByRatio;
+    if (!m['1:1'] || !m['3:4'] || !m['4:3']) {
+      context.addIssue({
+        code: 'custom',
+        path: ['image', 'compatibility', 'sizeByRatio'],
+        message: '尺寸模式为预设映射时，必须填写 1:1、3:4、4:3 三种尺寸',
+      });
+    }
+  }
 });
 
 export const ActiveAIProfilesInputSchema = z.object({

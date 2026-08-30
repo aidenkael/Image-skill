@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  buildSchemaInstruction,
   buildStrictResponseFormat,
   downgradeMode,
   extractJsonFromText,
@@ -31,18 +32,22 @@ describe('structured-output: response format 构造', () => {
     expect(result.responseFormat).toMatchObject({ type: 'json_schema' });
   });
 
-  it('resolveStructuredMode: json-object 模式返回 json_object 与系统后缀', () => {
-    const result = resolveStructuredMode('json-object', 'test', TestSchema);
+  it('resolveStructuredMode: json-object 模式返回 json_object 且 systemSuffix 包含真实 JSON Schema', () => {
+    const result = resolveStructuredMode('json-object', 'test_schema', TestSchema);
     expect(result.mode).toBe('json-object');
     expect(result.responseFormat).toEqual({ type: 'json_object' });
     expect(result.systemSuffix).toContain('exactly one JSON object');
+    expect(result.systemSuffix).toContain('Schema name: test_schema');
+    expect(result.systemSuffix).toContain('"type":"object"');
   });
 
-  it('resolveStructuredMode: text-json 模式不发送 response_format', () => {
-    const result = resolveStructuredMode('text-json', 'test', TestSchema);
+  it('resolveStructuredMode: text-json 模式不发送 response_format 且 systemSuffix 包含真实 JSON Schema', () => {
+    const result = resolveStructuredMode('text-json', 'test_schema', TestSchema);
     expect(result.mode).toBe('text-json');
     expect(result.responseFormat).toBeNull();
     expect(result.systemSuffix).toContain('ONLY raw JSON');
+    expect(result.systemSuffix).toContain('Schema name: test_schema');
+    expect(result.systemSuffix).toContain('"type":"object"');
   });
 
   it('resolveStructuredMode: auto 模式优先 json-schema', () => {
@@ -170,5 +175,25 @@ describe('structured-output: extractJsonFromText', () => {
   });
   it('直接解析裸 JSON', () => {
     expect(extractJsonFromText('{"b":2}')).toEqual({ b: 2 });
+  });
+});
+
+describe('structured-output: buildSchemaInstruction', () => {
+  it('输出包含 schema name 和 JSON Schema 字符串', () => {
+    const instruction = buildSchemaInstruction('hero_plan_v2', TestSchema);
+    expect(instruction).toContain('Schema name: hero_plan_v2');
+    expect(instruction).toContain('The required JSON object MUST match this JSON Schema exactly.');
+    expect(instruction).toContain('Do not add, remove, rename, merge, split, or change the type of fields.');
+    // Must contain the actual schema as JSON string
+    expect(instruction).toContain('"type":"object"');
+    expect(instruction).toContain('"name"');
+    expect(instruction).toContain('"count"');
+  });
+
+  it('使用 jsonSchemaOverride 而非 Zod 推导', () => {
+    const override = { type: 'object', properties: { custom: { type: 'string' } } };
+    const instruction = buildSchemaInstruction('custom_schema', TestSchema, override);
+    expect(instruction).toContain('"custom"');
+    expect(instruction).not.toContain('"count"');
   });
 });

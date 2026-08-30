@@ -107,6 +107,19 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
     expect(getBody().response_format).toEqual({ type: 'json_object' });
   });
 
+  it('json-object 模式 system prompt 包含真实 JSON Schema', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+    }));
+    await new OpenAICompatibleVisionProvider(jsonObjectConfig).analyze(analysisInput());
+    const systemMsg = (captured.messages as Array<{ role: string; content: string }>).find((m) => m.role === 'system')!.content;
+    expect(systemMsg).toContain('Schema name: product_intelligence');
+    expect(systemMsg).toContain('"type":"object"');
+    expect(systemMsg).toContain('exactly one JSON object');
+  });
+
   it('auto 模式：json-schema 不支持时降级为 json-object', async () => {
     let callCount = 0;
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
@@ -121,6 +134,65 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
     }));
     await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).resolves.toEqual(payload);
     expect(callCount).toBe(2);
+  });
+
+  it('auto 模式：json-schema→json-object 降级后 system prompt 包含真实 JSON Schema', async () => {
+    let callCount = 0;
+    let secondBody: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      callCount += 1;
+      const body = JSON.parse(String(init.body));
+      if (callCount === 1) {
+        return Response.json({ error: { message: 'json_schema not supported' } }, { status: 400 });
+      }
+      secondBody = body;
+      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+    }));
+    await new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput());
+    const systemMsg = (secondBody.messages as Array<{ role: string; content: string }>).find((m) => m.role === 'system')!.content;
+    expect(systemMsg).toContain('Schema name: product_intelligence');
+    expect(systemMsg).toContain('"type":"object"');
+  });
+
+  it('auto 模式：json-object→text-json 降级后 system prompt 包含真实 JSON Schema', async () => {
+    const textJsonAutoConfig = { ...autoConfig, compatibility: { ...baseCompat, structuredOutput: 'json-object' as const } };
+    let callCount = 0;
+    let secondBody: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      callCount += 1;
+      const body = JSON.parse(String(init.body));
+      if (callCount === 1) {
+        expect((body.response_format as { type: string }).type).toBe('json_object');
+        return Response.json({ error: { message: 'json_object not supported' } }, { status: 400 });
+      }
+      secondBody = body;
+      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+    }));
+    // json-object config is not auto, so no fallback — it should fail
+    await expect(new OpenAICompatibleVisionProvider(textJsonAutoConfig).analyze(analysisInput())).rejects.toThrow();
+    expect(callCount).toBe(1);
+  });
+
+  it('auto 模式：200 schema-invalid 最多 1 次 retry，retry 包含真实 JSON Schema', async () => {
+    let callCount = 0;
+    let secondBody: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      callCount += 1;
+      const body = JSON.parse(String(init.body));
+      if (callCount === 1) {
+        // Return valid JSON but with wrong structure (empty category)
+        return Response.json({ choices: [{ message: { content: JSON.stringify({ ...payload, analysis: { ...payload.analysis, category: '' } }) } }] });
+      }
+      secondBody = body;
+      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+    }));
+    await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).resolves.toEqual(payload);
+    expect(callCount).toBe(2);
+    // Second attempt should be json-object (downgraded from json-schema)
+    expect((secondBody.response_format as { type: string }).type).toBe('json_object');
+    const systemMsg = (secondBody.messages as Array<{ role: string; content: string }>).find((m) => m.role === 'system')!.content;
+    expect(systemMsg).toContain('Schema name: product_intelligence');
+    expect(systemMsg).toContain('"type":"object"');
   });
 
   it('auto 模式：401/403/429/500 不触发 capability fallback', async () => {
@@ -147,7 +219,8 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
       return Response.json({ choices: [{ message: { content: JSON.stringify({ prompt: 'A natural product hero scene.' }) } }] });
     }));
     await expect(new OpenAICompatibleVisionProvider(jsonSchemaConfig).planHero({ ...heroInput(), creativeIntent: '雨夜归家' })).resolves.toEqual({ prompt: 'A natural product hero scene.' });
-    expect(captured).toMatchObject({ model: jsonSchemaConfig.model, enable_thinking: false, stream: false });
+    expect(captured).toMatchObject({ model: jsonSchemaConfig.model, stream: false });
+    expect(captured).not.toHaveProperty('enable_thinking');
     expect(captured.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: true } });
   });
 

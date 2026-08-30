@@ -298,6 +298,7 @@ function ImageCapabilityEditor(props: {
   onTest(): void; canTest: boolean;
 }) {
   const [advanced, setAdvanced] = useState(false);
+  const isArk = props.driver === 'volcengine-ark-image';
   return (
     <fieldset className="capability-editor">
       <legend>氛围主图</legend>
@@ -310,10 +311,10 @@ function ImageCapabilityEditor(props: {
         <summary className="advanced-toggle">高级兼容设置</summary>
         <label className="capability-toggle"><input type="checkbox" checked={props.compatibility.referenceImage} onChange={(event) => props.onCompatibility({ referenceImage: event.target.checked })} />参考图输入</label>
         <label className="field">批量生成
-          <select className="input" value={props.compatibility.batchMode} onChange={(event) => props.onCompatibility({ batchMode: event.target.value as ImageBatchMode })}>
+          <select className="input" value={isArk && props.compatibility.batchMode === 'native' ? 'single' : props.compatibility.batchMode} onChange={(event) => props.onCompatibility({ batchMode: event.target.value as ImageBatchMode })}>
             <option value="auto">自动</option>
-            <option value="native">原生批量</option>
             <option value="single">单张循环</option>
+            <option value="native" disabled={isArk}>原生批量{isArk ? '（当前协议不支持）' : ''}</option>
           </select>
         </label>
         <label className="field">尺寸控制
@@ -330,10 +331,10 @@ function ImageCapabilityEditor(props: {
           </>
         )}
         <label className="field">提示词扩写
-          <select className="input" value={props.compatibility.promptEnhancement} onChange={(event) => props.onCompatibility({ promptEnhancement: event.target.value as ImagePromptEnhancement })}>
+          <select className="input" value={isArk && props.compatibility.promptEnhancement === 'on' ? 'off' : props.compatibility.promptEnhancement} onChange={(event) => props.onCompatibility({ promptEnhancement: event.target.value as ImagePromptEnhancement })}>
             <option value="auto">自动</option>
-            <option value="on">开</option>
             <option value="off">关</option>
+            <option value="on" disabled={isArk}>开{isArk ? '（当前协议不支持）' : ''}</option>
           </select>
         </label>
       </details>

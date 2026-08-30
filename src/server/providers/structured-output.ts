@@ -93,6 +93,27 @@ export function extractJsonFromText(raw: string): unknown {
   throw new Error('Unable to extract JSON from text response');
 }
 
+/* ── Schema instruction ── */
+
+/**
+ * Build a deterministic, compact JSON Schema instruction string.
+ * Used by json-object and text-json modes so the model actually sees the schema.
+ */
+export function buildSchemaInstruction(
+  schemaName: string,
+  zodSchema: z.ZodType,
+  jsonSchemaOverride?: JsonSchema,
+): string {
+  const schema = jsonSchemaOverride ?? sanitizeJsonSchema(z.toJSONSchema(zodSchema));
+  return [
+    'The required JSON object MUST match this JSON Schema exactly.',
+    `Schema name: ${schemaName}`,
+    'JSON Schema:',
+    JSON.stringify(schema),
+    'Do not add, remove, rename, merge, split, or change the type of fields.',
+  ].join('\n');
+}
+
 /* ── Mode resolution ── */
 
 export interface StructuredOutputModeResult {
@@ -114,17 +135,19 @@ export function resolveStructuredMode(
     return { mode: 'json-schema', responseFormat: jsonSchema };
   }
   if (requestedMode === 'json-object') {
+    const instruction = buildSchemaInstruction(schemaName, zodSchema, jsonSchemaOverride);
     return {
       mode: 'json-object',
       responseFormat: buildJsonObjectResponseFormat(),
-      systemSuffix: 'Return exactly one JSON object strictly matching the supplied schema. Do not add, remove or rename fields.',
+      systemSuffix: `Return exactly one JSON object strictly matching the schema below. Do not add, remove or rename fields.\n${instruction}`,
     };
   }
   // text-json
+  const instruction = buildSchemaInstruction(schemaName, zodSchema, jsonSchemaOverride);
   return {
     mode: 'text-json',
     responseFormat: null,
-    systemSuffix: 'Return ONLY raw JSON. No markdown, no explanation, no surrounding text.',
+    systemSuffix: `Return ONLY raw JSON. No markdown, no explanation, no surrounding text.\n${instruction}`,
   };
 }
 

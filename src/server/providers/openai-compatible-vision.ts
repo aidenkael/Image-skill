@@ -254,7 +254,6 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
           { role: 'user', content },
         ],
         ...(modeResult.responseFormat ? { response_format: modeResult.responseFormat } : {}),
-        enable_thinking: false,
         stream: false,
       };
 
@@ -278,9 +277,7 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
           const nextMode = downgradeMode(modeResult.mode);
           if (nextMode) {
             lastError = { status: response.status, body: responseRaw };
-            modeResult = nextMode === 'json-object'
-              ? { mode: 'json-object', responseFormat: { type: 'json_object' }, systemSuffix: 'Return exactly one JSON object strictly matching the supplied schema. Do not add, remove or rename fields.' }
-              : { mode: 'text-json', responseFormat: null, systemSuffix: 'Return ONLY raw JSON. No markdown, no explanation, no surrounding text.' };
+            modeResult = resolveStructuredMode(nextMode, schemaName, options.schema, jsonSchemaOverride);
             await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet: responseRaw, structuredMode: modeResult.mode, structuredFallback: nextMode });
             continue;
           }
@@ -322,9 +319,7 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
       if (structuredMode === 'auto' && attempt === 0) {
         const nextMode = downgradeMode(modeResult.mode);
         if (nextMode) {
-          modeResult = nextMode === 'json-object'
-            ? { mode: 'json-object', responseFormat: { type: 'json_object' }, systemSuffix: 'Return exactly one JSON object strictly matching the supplied schema. Do not add, remove or rename fields.' }
-            : { mode: 'text-json', responseFormat: null, systemSuffix: 'Return ONLY raw JSON. No markdown, no explanation, no surrounding text.' };
+          modeResult = resolveStructuredMode(nextMode, schemaName, options.schema, jsonSchemaOverride);
           await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, zodIssues: zodIssues(normalized.error), structuredMode: modeResult.mode, structuredFallback: 'schema-retry' });
           continue;
         }

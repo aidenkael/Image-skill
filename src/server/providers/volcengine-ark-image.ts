@@ -14,7 +14,8 @@ function resolveSize(config: ResolvedImageConfig, ratio: ImageGenerationInput['r
   if (config.compatibility.sizeMode === 'provider-default') return undefined;
   const sizeMap = config.compatibility.sizeByRatio;
   const size = sizeMap[ratio as keyof typeof sizeMap];
-  return size || undefined;
+  if (!size) throw new ProviderConfigError(`尺寸模式为预设映射时，当前比例 ${ratio} 缺少对应尺寸配置。`);
+  return size;
 }
 
 export class VolcengineArkImageProvider implements ImageProvider {
@@ -24,6 +25,22 @@ export class VolcengineArkImageProvider implements ImageProvider {
     if (!this.config.compatibility.referenceImage) {
       throw new ProviderConfigError('当前图片模型不支持参考图输入，不能用于氛围主图。');
     }
+
+    // ── Capability validation (before any HTTP request) ──
+
+    // batchMode: Ark only supports single-loop. auto resolves to single.
+    const batchMode = this.config.compatibility.batchMode;
+    if (batchMode === 'native') {
+      throw new ProviderConfigError('火山方舟图片 adapter 当前不支持原生批量模式，请使用 single 或 auto。');
+    }
+    // auto and single both resolve to single-loop
+
+    // promptEnhancement: Ark does not support prompt enhancement
+    const promptEnhancement = this.config.compatibility.promptEnhancement;
+    if (promptEnhancement === 'on') {
+      throw new ProviderConfigError('火山方舟图片 adapter 当前不支持提示词扩写，请使用 auto 或 off。');
+    }
+    // auto and off both resolve to: do not send any prompt_extend parameter
 
     let imageData: Buffer;
     try { imageData = await fs.readFile(input.imagePath); }
