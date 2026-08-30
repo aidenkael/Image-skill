@@ -1,14 +1,13 @@
 import { z } from 'zod';
 import {
   TASK_KINDS,
-  HeroRatioSchema,
   HeroCreativeModeSchema,
   HeroHumanPresenceSchema,
   normalizeLegacyHeroOptionsValue,
   CollageTaskOptionsSchema,
   OptimizeTaskOptionsSchema,
 } from './tasks';
-import { HeroCreativeLevelSchema } from './hero-workflow';
+import { HeroCreativeLevelSchema, HeroRatioSchema } from './hero-workflow';
 import { TemplateDocumentSchema } from './templates';
 
 /**
@@ -34,6 +33,7 @@ export const WorkspaceHeroDraftOptionsSchema = z.preprocess(
     creativeIntent: z.string().trim().max(500).default(''),
     humanPresence: HeroHumanPresenceSchema.default('auto'),
     creativeLevel: HeroCreativeLevelSchema.default('balanced'),
+    planId: z.string().uuid().nullable().default(null),
   }),
 );
 
@@ -52,6 +52,7 @@ export const WorkspaceDraftSchema = z.object({
     creativeIntent: '',
     humanPresence: 'auto',
     creativeLevel: 'balanced',
+    planId: null,
   }),
   heroCount: z.number().int().min(1).max(4).default(1),
 

@@ -49,14 +49,6 @@ function payload(assetId: string) {
       assetObservations: [{ assetId, suggestedRole: 'front', quality: 'good', note: '主体清晰' }],
     },
     plan: {
-      heroConcepts: [{
-        id: 'hero-1',
-        title: '晨间故事',
-        recommendedSourceAssetId: assetId,
-        creativeBrief: '用晨间使用瞬间建立温暖氛围',
-        prompt: 'A warm morning ritual with commercial storytelling.',
-        reason: '突出商品日常吸引力',
-      }],
       collage: {
         titleOptions: [{ text: '简洁杯身', evidenceAssetIds: [assetId] }],
         sellingPoints: [{ text: '白色杯身', evidenceAssetIds: [assetId] }],
@@ -93,7 +85,7 @@ describe('商品理解服务校验与原子持久化', () => {
     await expect(fs.access(workspaceRuntimePath(workspace.id, 'intelligence.json'))).rejects.toThrow();
   });
 
-  it('参考图不能成为 Hero 源方向', async () => {
+  it('参考图不能作为卖点或事实依据', async () => {
     const { workspace, asset } = await fixture();
     const primary = await saveAsset(workspace.id, {
       buffer: await sharp({ create: { width: 10, height: 10, channels: 3, background: '#dddddd' } }).png().toBuffer(),
@@ -260,7 +252,7 @@ describe('商品理解契约与新鲜度', () => {
   });
 
   it('接受完整结构，删除/改角色会失效，新增无关素材不会失效', () => {
-    expect(record.plan.heroConcepts[0].id).toBe('hero-1');
+    expect(record.plan.collage.titleOptions[0].text).toBe('简洁杯身');
     expect(isIntelligenceFresh(record, [assetRef()])).toBe(true);
     expect(isIntelligenceFresh(record, [])).toBe(false);
     expect(isIntelligenceFresh(record, [assetRef('detail')])).toBe(false);

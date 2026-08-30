@@ -86,7 +86,6 @@ function allEvidenceIds(payload: ProductIntelligencePayload): string[] {
     ...payload.analysis.visibleFacts.flatMap((claim) => claim.evidenceAssetIds),
     ...payload.analysis.visibleText.flatMap((claim) => claim.evidenceAssetIds),
     ...payload.analysis.assetObservations.map((item) => item.assetId),
-    ...payload.plan.heroConcepts.map((item) => item.recommendedSourceAssetId),
     ...payload.plan.collage.titleOptions.flatMap((claim) => claim.evidenceAssetIds),
     ...payload.plan.collage.sellingPoints.flatMap((claim) => claim.evidenceAssetIds),
   ];
@@ -121,15 +120,6 @@ function validatePayload(
     assetIds.some((id) => !observationIds.includes(id))
   ) {
     throw new IntelligenceValidationError('商品分析必须逐张返回且只能返回一条素材观察');
-  }
-  const conceptIds = payload.plan.heroConcepts.map((concept) => concept.id);
-  if (new Set(conceptIds).size !== conceptIds.length) {
-    throw new IntelligenceValidationError('商品分析返回了重复的创意方向');
-  }
-  for (const concept of payload.plan.heroConcepts) {
-    if (roles.get(concept.recommendedSourceAssetId) === 'reference') {
-      throw new IntelligenceValidationError('参考图不能作为氛围主图的商品源图');
-    }
   }
 }
 

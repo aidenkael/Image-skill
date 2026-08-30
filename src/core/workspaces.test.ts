@@ -53,6 +53,7 @@ describe('商品工作区契约', () => {
       creativeIntent: '',
       humanPresence: 'require',
       creativeLevel: 'balanced',
+      planId: null,
     });
   });
 

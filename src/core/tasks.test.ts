@@ -11,6 +11,7 @@ const validHero = {
     ratio: '1:1',
     creativeMode: 'recommended',
     humanPresence: 'auto',
+    planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
   },
 };
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AssetRef, AssetRole } from '@/core/assets';
+import type { HeroPlanRecord } from '@/core/hero-workflow';
 import type {
   CollageTaskOptions,
   HeroTaskOptions,
@@ -21,6 +22,7 @@ import {
   removeAssetFromCollageDocument,
   sanitizeCollageDocumentAssets,
 } from '@/features/collage/model/collage';
+import { createHeroPlan, getHeroPlan } from '@/features/hero/model/api';
 import { createTask, getTask, listTasks } from '@/features/workbench/model/api';
 import { getWorkspaceDraft, saveWorkspaceDraft } from '@/features/workspaces/model/api';
 
@@ -41,6 +43,8 @@ export interface WorkbenchModel {
   hydrated: boolean;
   uploading: boolean;
   heroBusy: boolean;
+  heroPlan: HeroPlanRecord | null;
+  heroPlanLoading: boolean;
   collageBusy: boolean;
   optimizeBusy: boolean;
   assetMutatingIds: Set<string>;
@@ -61,6 +65,7 @@ export interface WorkbenchModel {
   setActiveCollageVariant(index: number): void;
   replaceActiveCollageVariant(doc: TemplateDocument): void;
   runHero(): Promise<TaskRecord | null>;
+  generateHeroPlan(): Promise<void>;
   patchOptimizeOptions(patch: Partial<OptimizeTaskOptions>): void;
   runOptimize(): Promise<TaskRecord | null>;
   createCollageTask(): Promise<TaskRecord | null>;
@@ -69,6 +74,11 @@ export interface WorkbenchModel {
 }
 
 const EMPTY_DRAFT = WorkspaceDraftSchema.parse({});
+
+function toHeroTaskOptions(draft: { planId?: string | null; [key: string]: unknown }): HeroTaskOptions {
+  const { planId, ...rest } = draft;
+  return { ...rest, ...(planId ? { planId } : {}) } as HeroTaskOptions;
+}
 
 export class OrderedDraftWriter {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -185,7 +195,7 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const [assets, setAssets] = useState<AssetRef[]>([]);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [kind, setKindState] = useState<TaskKind>(EMPTY_DRAFT.kind);
-  const [heroOptions, setHeroOptionsState] = useState<HeroTaskOptions>(EMPTY_DRAFT.heroOptions);
+  const [heroOptions, setHeroOptionsState] = useState<HeroTaskOptions>(toHeroTaskOptions(EMPTY_DRAFT.heroOptions));
   const [heroCount, setHeroCountState] = useState(EMPTY_DRAFT.heroCount);
   const [collageOptions, setCollageOptionsState] = useState<CollageTaskOptions>(EMPTY_DRAFT.collageOptions);
   const [collageCount, setCollageCountState] = useState(EMPTY_DRAFT.collageCount);
@@ -197,6 +207,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
   const [optimizeOptions, setOptimizeOptionsState] = useState<OptimizeTaskOptions>(EMPTY_DRAFT.optimizeOptions);
   const [latestOptimizeTask, setLatestOptimizeTask] = useState<TaskRecord | null>(null);
   const [latestOptimizeTaskId, setLatestOptimizeTaskId] = useState<string | null>(null);
+  const [heroPlan, setHeroPlan] = useState<HeroPlanRecord | null>(null);
+  const [heroPlanLoading, setHeroPlanLoading] = useState(false);
   const [hydratedWorkspaceId, setHydratedWorkspaceId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [heroSubmitting, setHeroSubmitting] = useState(false);
@@ -223,7 +235,7 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setAssets([]);
     setSelectedAssetIds([]);
     setKindState(EMPTY_DRAFT.kind);
-    setHeroOptionsState(EMPTY_DRAFT.heroOptions);
+    setHeroOptionsState(toHeroTaskOptions(EMPTY_DRAFT.heroOptions));
     setHeroCountState(EMPTY_DRAFT.heroCount);
     setCollageOptionsState(EMPTY_DRAFT.collageOptions);
     setCollageCountState(EMPTY_DRAFT.collageCount);
@@ -235,6 +247,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setOptimizeOptionsState(EMPTY_DRAFT.optimizeOptions);
     setLatestOptimizeTask(null);
     setLatestOptimizeTaskId(null);
+    setHeroPlan(null);
+    setHeroPlanLoading(false);
     setHydratedWorkspaceId(null);
     setUploading(false);
     setHeroSubmitting(false);
@@ -249,13 +263,14 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
       listAssets(workspaceId),
       listTasks(workspaceId),
       getWorkspaceDraft(workspaceId),
+      getHeroPlan(workspaceId),
     ])
-      .then(([assetList, taskList, draft]) => {
+      .then(([assetList, taskList, draft, plan]) => {
         if (ignore || requestVersionRef.current !== version) return;
-        const restoredHeroOptions = {
+        const restoredHeroOptions = toHeroTaskOptions({
           ...draft.heroOptions,
           sourceAssetId: resolveExecutableSourceAssetId(draft.heroOptions.sourceAssetId, assetList),
-        };
+        });
         const savedHeroTask = draft.latestHeroTaskId
           ? taskList.find((task) => task.id === draft.latestHeroTaskId && task.request.kind === 'hero')
           : null;
@@ -286,6 +301,7 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
         setOptimizeOptionsState(restoredOptimizeOptions);
         setLatestOptimizeTask(restoredOptimizeTask);
         setLatestOptimizeTaskId(restoredOptimizeTask?.id ?? null);
+        setHeroPlan(plan);
         setHydratedWorkspaceId(workspaceId);
       })
       .catch((reason: unknown) => {
@@ -480,6 +496,38 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setCollageVariantsState((current) => replaceActiveCollageVariantInList(current, activeCollageVariantRef.current, doc, assetsRef.current));
   }, []);
 
+  const generateHeroPlan = useCallback(async () => {
+    const currentWorkspaceId = activeWorkspaceRef.current;
+    if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return;
+    const sourceAsset = assetsRef.current.find((asset) => asset.id === heroOptions.sourceAssetId);
+    if (!sourceAsset || sourceAsset.role === 'reference') {
+      setError('请先选择一张源商品图片');
+      return;
+    }
+    setHeroPlanLoading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const record = await createHeroPlan(currentWorkspaceId, {
+        sourceAssetId: sourceAsset.id,
+        ratio: heroOptions.ratio,
+        creativeMode: heroOptions.creativeMode,
+        creativeIntent: heroOptions.creativeMode === 'custom' ? heroOptions.creativeIntent?.trim() : undefined,
+        humanPresence: heroOptions.humanPresence,
+        creativeLevel: heroOptions.creativeLevel,
+      });
+      if (activeWorkspaceRef.current !== currentWorkspaceId) return;
+      setHeroPlan(record);
+      setHeroOptionsState((current) => ({ ...current, planId: record.id }));
+    } catch (reason) {
+      if (activeWorkspaceRef.current === currentWorkspaceId) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    } finally {
+      if (activeWorkspaceRef.current === currentWorkspaceId) setHeroPlanLoading(false);
+    }
+  }, [heroOptions]);
+
   const runHero = useCallback(async (): Promise<TaskRecord | null> => {
     const currentWorkspaceId = activeWorkspaceRef.current;
     if (!currentWorkspaceId || hydratedWorkspaceRef.current !== currentWorkspaceId) return null;
@@ -494,11 +542,12 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setError(null);
     setNotice(null);
     try {
+      const { planId, ...restOptions } = heroOptions;
       const task = await createTask(currentWorkspaceId, {
         kind: 'hero',
         assetIds: [sourceAsset.id],
         count: heroCount,
-        options: heroOptions,
+        options: { ...restOptions, ...(planId ? { planId } : {}) },
       });
       const taskList = await listTasks(currentWorkspaceId);
       const patch = heroRunStatePatch(activeWorkspaceRef.current, currentWorkspaceId, task, taskList);
@@ -574,7 +623,7 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     assets: hydrated ? assets : [],
     selectedAssetIds: hydrated ? selectedAssetIds : [],
     kind: hydrated ? kind : EMPTY_DRAFT.kind,
-    heroOptions: hydrated ? heroOptions : EMPTY_DRAFT.heroOptions,
+    heroOptions: hydrated ? heroOptions : toHeroTaskOptions(EMPTY_DRAFT.heroOptions),
     heroCount: hydrated ? heroCount : EMPTY_DRAFT.heroCount,
     collageOptions: hydrated ? collageOptions : EMPTY_DRAFT.collageOptions,
     collageCount: hydrated ? collageCount : EMPTY_DRAFT.collageCount,
@@ -587,6 +636,8 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     hydrated,
     uploading: uploading || (workspaceId !== null && !hydrated),
     heroBusy,
+    heroPlan: hydrated ? heroPlan : null,
+    heroPlanLoading,
     collageBusy,
     optimizeBusy,
     assetMutatingIds,
@@ -606,6 +657,7 @@ export function useWorkbench(workspaceId: string | null): WorkbenchModel {
     setActiveCollageVariant: setActiveCollageVariantState,
     replaceActiveCollageVariant,
     runHero,
+    generateHeroPlan,
     patchOptimizeOptions,
     runOptimize,
     createCollageTask,

@@ -92,13 +92,13 @@ describe('Hero 执行分支', () => {
     expect(generateMock.mock.calls[0][0].prompt).toContain('natural human interaction');
   });
 
-  it('count>1 且有备选 prompt 时用备选 prompt 额外生成 1 张', async () => {
-    generateMock.mockResolvedValue([{ url: 'https://cdn.example/1.png' }]);
+  it('count>1 时单次调用 provider 并返回完整数量', async () => {
+    generateMock.mockResolvedValue([{ url: 'https://cdn.example/1.png' }, { url: 'https://cdn.example/2.png' }]);
     stubDownload();
-    await executeHeroWorkflow(input({ count: 2 }), plan(), outDir);
-    expect(generateMock).toHaveBeenCalledTimes(2);
-    expect(generateMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ count: 1, prompt: expect.stringContaining('A warm morning tabletop hero.') }));
-    expect(generateMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ count: 1, prompt: expect.stringContaining('A dusk window hero.') }));
+    const images = await executeHeroWorkflow(input({ count: 2 }), plan(), outDir, { count: 2, startIndex: 0 });
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(generateMock).toHaveBeenCalledWith(expect.objectContaining({ count: 2 }));
+    expect(images).toHaveLength(2);
   });
 
   it('无备选 prompt 时保持单次调用与完整 count', async () => {

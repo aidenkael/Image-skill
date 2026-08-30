@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type { HeroHumanPolicy } from './hero-workflow';
-import { HeroCreativeLevelSchema, HeroHumanPolicySchema } from './hero-workflow';
+import { HeroCreativeLevelSchema, HeroHumanPolicySchema, HeroRatioSchema } from './hero-workflow';
 import { TaskResultSchema } from './results';
+
+export type { HeroRatio } from './hero-workflow';
 
 /**
  * 任务领域契约（V1 单一应用内共享）。
@@ -12,9 +14,6 @@ export const TASK_KINDS = ['hero', 'collage', 'detail', 'optimize'] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
 export const EXECUTABLE_TASK_KINDS: readonly TaskKind[] = ['hero', 'collage', 'optimize'];
-
-export const HeroRatioSchema = z.enum(['1:1', '3:4', '4:3']);
-export type HeroRatio = z.infer<typeof HeroRatioSchema>;
 
 export const HeroCreativeModeSchema = z.enum(['recommended', 'custom']);
 export type HeroCreativeMode = z.infer<typeof HeroCreativeModeSchema>;
@@ -44,6 +43,7 @@ export const HeroTaskOptionsSchema = z.preprocess(
     creativeIntent: z.string().trim().max(500).optional(),
     humanPresence: HeroHumanPresenceSchema.default('auto'),
     creativeLevel: HeroCreativeLevelSchema.default('balanced'),
+    planId: z.string().uuid().optional(),
   }).superRefine((value, ctx) => {
     if (value.creativeMode === 'custom' && !value.creativeIntent?.trim()) {
       ctx.addIssue({
@@ -161,6 +161,9 @@ export function validateCreateTaskRequest(
       throw new TaskValidationError(
         '氛围主图必须且只能提交一张源商品图片，并与 sourceAssetId 一致',
       );
+    }
+    if (!parsed.data.planId) {
+      throw new TaskValidationError('氛围主图生成需要先获取 AI 方案，请先生成方案');
     }
   } else if (req.kind === 'collage') {
     const parsed = CollageTaskOptionsSchema.safeParse(req.options);

@@ -32,13 +32,13 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
   if (assetCount === 0) {
     return (
       <section className="insight-bar insight-empty">
-        上传商品图后可分析商品并获得展示方案参考；不分析也可以直接使用 AI 推荐方案。
+        上传商品图后可获得商品视觉理解与组合卖点图文案依据；不分析也可以直接生成氛围主图。
       </section>
     );
   }
   if (loading) return <section className="insight-bar">正在读取商品分析…</section>;
   if (analyzing) {
-    return <section className="insight-bar is-working">正在理解商品与策划展示方案… 切换任务或商品不会中断。</section>;
+    return <section className="insight-bar is-working">正在理解商品与策划组合卖点文案… 切换任务或商品不会中断。</section>;
   }
 
   return (
@@ -77,7 +77,7 @@ export function ProductInsightBar(props: ProductInsightBarProps) {
         <div className="insight-summary">
           <div>
             <strong>AI 尚未分析商品</strong>
-            <p>分析商品可获得更贴合的展示方案参考；不分析也可以直接使用 AI 推荐方案。</p>
+            <p>分析商品可获得视觉理解与组合卖点文案依据；不分析也可以直接生成氛围主图。</p>
           </div>
           <button
             type="button"

@@ -1,9 +1,14 @@
 import { z } from 'zod';
+import type { AssetRole } from './assets';
+import { ASSET_ROLES } from './assets';
 
 /**
  * 通用氛围主图工作流契约（全品类共用，不做类别模板）。
  * 硬保真：锁商品身份；软联想：放展示方式。
  */
+
+export const HeroRatioSchema = z.enum(['1:1', '3:4', '4:3']);
+export type HeroRatio = z.infer<typeof HeroRatioSchema>;
 
 export const HeroDisplayModeSchema = z.enum(['scene-staging', 'human-interaction']);
 export type HeroDisplayMode = z.infer<typeof HeroDisplayModeSchema>;
@@ -40,3 +45,23 @@ export type HeroReview = z.infer<typeof HeroReviewSchema>;
 
 /** 审片通过阈值：分数达标且不存在严重结构/身份错误。 */
 export const HERO_REVIEW_PASS_SCORE = 70;
+
+/**
+ * Hero 执行方案持久化记录。
+ * 服务端只保存当前一个计划，不做计划历史；
+ * 用于保证“用户看到的方案 == 实际执行方案”。
+ */
+export const HeroPlanRecordSchema = z.object({
+  id: z.string().uuid(),
+  workspaceId: z.string().uuid(),
+  sourceAssetId: z.string().uuid(),
+  sourceAssetRole: z.enum(ASSET_ROLES),
+  ratio: HeroRatioSchema,
+  creativeMode: z.enum(['recommended', 'custom']),
+  creativeIntent: z.string().trim().max(500).optional(),
+  humanPolicy: HeroHumanPolicySchema,
+  creativeLevel: HeroCreativeLevelSchema,
+  createdAt: z.string(),
+  plan: HeroPlanV2Schema,
+});
+export type HeroPlanRecord = z.infer<typeof HeroPlanRecordSchema>;

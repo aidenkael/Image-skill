@@ -43,6 +43,7 @@ function heroTask(
         creativeMode: 'recommended',
         humanPresence: 'auto',
         creativeLevel: 'balanced',
+        planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
       },
     },
     status,

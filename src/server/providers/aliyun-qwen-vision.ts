@@ -16,17 +16,14 @@ import { invalidProviderResponse, providerFetchError, providerHttpError } from '
 export const SYSTEM_PROMPT = `You are an ecommerce product photographer and visual merchandising planner.
 Return exactly one object matching the supplied JSON Schema, with no markdown.
 Output every required field. Use [] when a required list has no supported facts.
-All user-facing analysis/copy text must be Simplified Chinese. Hero prompt text must be English.
+All user-facing analysis/copy text must be Simplified Chinese.
 Treat all factual product claims as evidence-bound. Only describe facts directly visible in supplied product images.
 Never invent material, exact dimensions, weight, capacity, model, compatibility, electrical properties,
 waterproof, food-safe, hypoallergenic, certification, performance or durability claims. Put uncertain items in unverifiedFacts.
 assetObservations must contain exactly one observation for every supplied asset.
 Every returned assetId and evidenceAssetIds value must use an exact supplied asset ID.
 Reference assets may guide visual direction only. They must never appear in factual evidenceAssetIds.
-recommendedSourceAssetId must use a supplied non-reference asset ID.
-visibleFacts, visibleText and collage text must be evidence-bound.
-Hero concepts must preserve product identity, shape, proportion, color, pattern, logo/text, visible material appearance,
-structure, count, accessories, ports/hardware and visible function. Use ids hero-1, hero-2, hero-3 in order.`;
+visibleFacts, visibleText and collage text must be evidence-bound.`;
 
 type JsonSchema = Record<string, unknown>;
 
@@ -139,16 +136,12 @@ function reviewHeroInstruction(input: HeroReviewInput): string {
 export function buildProductIntelligenceJsonSchema(input: ProductIntelligenceInput): JsonSchema {
   const schema = supportedSchema(z.toJSONSchema(ProductIntelligencePayloadSchema));
   const assetIds = [...new Set(input.assets.map((asset) => asset.assetId))];
-  const nonReferenceAssetIds = [...new Set(input.assets
-    .filter((asset) => asset.role !== 'reference')
-    .map((asset) => asset.assetId))];
 
   restrictAssetIds(property(schema, 'analysis', 'visibleFacts', 'items', 'evidenceAssetIds'), assetIds);
   restrictAssetIds(property(schema, 'analysis', 'visibleText', 'items', 'evidenceAssetIds'), assetIds);
   restrictAssetValue(property(schema, 'analysis', 'assetObservations', 'items', 'assetId'), assetIds);
   restrictAssetIds(property(schema, 'plan', 'collage', 'titleOptions', 'items', 'evidenceAssetIds'), assetIds);
   restrictAssetIds(property(schema, 'plan', 'collage', 'sellingPoints', 'items', 'evidenceAssetIds'), assetIds);
-  restrictAssetValue(property(schema, 'plan', 'heroConcepts', 'items', 'recommendedSourceAssetId'), nonReferenceAssetIds);
   return schema;
 }
 

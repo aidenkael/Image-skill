@@ -30,6 +30,7 @@ export interface AILogEvent {
   creativeLevel?: string;
   reviewScore?: number;
   reviewPassed?: boolean;
+  attempt?: number;
   normalization?: 'single-item-array-unwrapped';
   apiKey?: string;
 }

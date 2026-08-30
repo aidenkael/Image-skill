@@ -45,14 +45,24 @@ async function saveGeneratedImage(buf: Buffer, outDir: string, name: string): Pr
   return { localPath, extension };
 }
 
+export interface ExecuteHeroWorkflowOptions {
+  count: number;
+  startIndex: number;
+  variant?: 'primary' | 'alt';
+  attempt?: number;
+}
+
 export async function executeHeroWorkflow(
   input: HeroWorkflowInput,
   plan: HeroPlanV2,
   outDir: string,
+  options: ExecuteHeroWorkflowOptions = { count: input.count, startIndex: 0 },
 ): Promise<ExecutedHeroImage[]> {
   const provider = await createActiveImageProvider();
   const requestId = crypto.randomUUID();
   const started = Date.now();
+  const attempt = options.attempt ?? 1;
+  const promptVariant = options.variant ?? 'primary';
   const log = (extra: Record<string, unknown>) => writeAILog({
     requestId,
     operation: 'hero.generate',
@@ -63,31 +73,20 @@ export async function executeHeroWorkflow(
     humanPolicy: input.humanPolicy,
     creativeLevel: input.creativeLevel,
     ratio: input.ratio,
-    count: input.count,
+    count: options.count,
+    attempt,
     ...extra,
   });
 
   try {
-    // count>1 且策划给出备选 prompt 时，额外用备选 prompt 生成 1 张，避免同质化重复。
-    const useAlt = Boolean(plan.altPrompt) && input.count > 1;
-    const primaryCount = useAlt ? input.count - 1 : input.count;
     const generated = await provider.generate({
       imagePath: input.sourceImagePath,
-      prompt: buildHeroWorkflowPrompt(plan, 'primary'),
+      prompt: buildHeroWorkflowPrompt(plan, promptVariant),
       ratio: input.ratio,
-      count: primaryCount,
+      count: options.count,
     });
-    if (useAlt) {
-      const altGenerated = await provider.generate({
-        imagePath: input.sourceImagePath,
-        prompt: buildHeroWorkflowPrompt(plan, 'alt'),
-        ratio: input.ratio,
-        count: 1,
-      });
-      generated.push(...altGenerated);
-    }
-    if (generated.length !== input.count) {
-      throw new Error(`模型返回结果数量不完整：要求 ${input.count} 张，实际 ${generated.length} 张`);
+    if (generated.length !== options.count) {
+      throw new Error(`模型返回结果数量不完整：要求 ${options.count} 张，实际 ${generated.length} 张`);
     }
 
     const images: ExecutedHeroImage[] = [];
@@ -95,12 +94,12 @@ export async function executeHeroWorkflow(
     for (const item of generated) {
       if (!item.url) continue;
       const buf = await downloadImage(item.url);
-      const saved = await saveGeneratedImage(buf, outDir, `candidate-${String(idx + 1).padStart(2, '0')}`);
+      const saved = await saveGeneratedImage(buf, outDir, `candidate-${String(options.startIndex + idx + 1).padStart(2, '0')}`);
       images.push({ url: item.url, buffer: buf, ...saved });
       idx += 1;
     }
-    if (images.length !== input.count) {
-      throw new Error(`模型返回结果数量不完整：要求 ${input.count} 张，实际 ${images.length} 张`);
+    if (images.length !== options.count) {
+      throw new Error(`模型返回结果数量不完整：要求 ${options.count} 张，实际 ${images.length} 张`);
     }
     await log({ status: 'succeeded' });
     return images;

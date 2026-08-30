@@ -248,12 +248,14 @@ export function Workbench() {
                 workspaceId={workspaceId}
                 options={wb.heroOptions}
                 assets={wb.assets}
-                intelligence={freshIntelligence}
                 count={wb.heroCount}
                 busy={wb.heroBusy}
                 aiConfigured={Boolean(aiSettings.settings?.activeImageProfileId)}
+                heroPlan={wb.heroPlan}
+                planLoading={wb.heroPlanLoading}
                 onChange={wb.patchHeroOptions}
                 onCountChange={wb.setHeroCount}
+                onGeneratePlan={() => void wb.generateHeroPlan()}
                 onGenerate={() => void wb.runHero()}
               />
             ) : null}

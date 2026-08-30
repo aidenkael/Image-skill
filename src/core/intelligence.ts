@@ -30,22 +30,12 @@ export const ProductAnalysisSchema = z.object({
   assetObservations: z.array(AssetObservationSchema).min(1).max(9),
 });
 
-export const HeroCreativeConceptSchema = z.object({
-  id: z.enum(['hero-1', 'hero-2', 'hero-3']),
-  title: z.string().trim().min(1).max(48),
-  recommendedSourceAssetId: z.string().uuid(),
-  creativeBrief: z.string().trim().min(1).max(240),
-  prompt: z.string().trim().min(1).max(900),
-  reason: z.string().trim().min(1).max(160),
-});
-
 export const CollageCopyPlanSchema = z.object({
   titleOptions: z.array(CollageTitleClaimSchema).max(3),
   sellingPoints: z.array(CollageSellingPointClaimSchema).max(6),
 });
 
 export const VisualPlanSchema = z.object({
-  heroConcepts: z.array(HeroCreativeConceptSchema).min(1).max(3),
   collage: CollageCopyPlanSchema,
 });
 
@@ -63,7 +53,7 @@ export const IntelligenceAssetSnapshotSchema = z.object({
   role: z.enum(ASSET_ROLES),
 });
 
-export const PRODUCT_INTELLIGENCE_SCHEMA_VERSION = 3 as const;
+export const PRODUCT_INTELLIGENCE_SCHEMA_VERSION = 4 as const;
 
 export const ProductIntelligenceRecordSchema = ProductIntelligencePayloadSchema.extend({
   schemaVersion: z.literal(PRODUCT_INTELLIGENCE_SCHEMA_VERSION),

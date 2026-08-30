@@ -34,8 +34,8 @@ const plan: HeroPlanV2 = {
 const asset = { id: ASSET_ID, name: 'cup.png', mimeType: 'image/png' as const, width: 100, height: 100, role: 'front' as const, createdAt: '2026-08-25T00:00:00.000Z' };
 const intelligence: ProductIntelligenceRecord = {
   analysis: { category: '杯子', visualSummary: '白色杯身', visibleFacts: [], visibleText: [], unverifiedFacts: [], assetObservations: [] },
-  plan: { heroConcepts: [], collage: { titleOptions: [], sellingPoints: [] } },
-  schemaVersion: 3,
+  plan: { collage: { titleOptions: [], sellingPoints: [] } },
+  schemaVersion: 4,
   analyzedAt: '2026-08-25T00:00:00.000Z',
   assetSnapshot: [{ id: ASSET_ID, role: 'front' }],
 };

@@ -65,6 +65,7 @@ describe('Workspace 任务素材归属校验', () => {
           ratio: '1:1',
           creativeMode: 'recommended',
           humanPresence: 'auto',
+          planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
         },
       }),
     ).rejects.toThrow(TaskValidationError);
@@ -134,6 +135,7 @@ describe('Workspace 任务素材归属校验', () => {
           ratio: '1:1',
           creativeMode: 'recommended',
           humanPresence: 'auto',
+          planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
         },
       },
       {
@@ -197,6 +199,7 @@ describe('Hero 运行连续性与重复提交保护', () => {
         ratio: '1:1',
         creativeMode: 'recommended',
         humanPresence: 'auto',
+        planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
       },
     };
     return { workspace, assetId, request };

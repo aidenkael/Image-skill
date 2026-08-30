@@ -3,31 +3,27 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { HeroPlanV2, HeroReview } from '@/core/hero-workflow';
+import type { HeroPlanV2, HeroPlanRecord, HeroReview } from '@/core/hero-workflow';
 import type { CreateTaskRequest } from '@/core/tasks';
-import type { ProductIntelligenceRecord } from '@/core/intelligence';
 
 /**
- * Hero 任务集成测试：任务入口只负责编排，
- * 策划 / 执行 / 审片经由 src/server/hero-workflow 的 provider 边界完成。
+ * Hero 任务集成测试：任务入口加载已策划方案并执行生成与审片，
+ * 正式生成阶段不再调用 planHeroV2。
  */
 
-const { generateMock, planHeroV2Mock, reviewHeroMock, assetFileMock, listAssetsMock, intelligenceMock, workspaceMock, previewMock } = vi.hoisted(() => ({
+const { generateMock, reviewHeroMock, assetFileMock, listAssetsMock, workspaceMock, previewMock, getHeroPlanRecordMock } = vi.hoisted(() => ({
   generateMock: vi.fn(),
-  planHeroV2Mock: vi.fn(),
   reviewHeroMock: vi.fn(),
   assetFileMock: vi.fn(),
   listAssetsMock: vi.fn(),
-  intelligenceMock: vi.fn(),
   workspaceMock: vi.fn(),
   previewMock: vi.fn(),
+  getHeroPlanRecordMock: vi.fn(),
 }));
 vi.mock('@/server/assets/service', () => ({ assetFile: assetFileMock, listAssets: listAssetsMock }));
-vi.mock('@/server/intelligence/service', () => ({ getWorkspaceIntelligence: intelligenceMock }));
 vi.mock('@/server/providers/factory', () => ({
   createActiveImageProvider: async () => ({ generate: (...args: unknown[]) => generateMock(...args) }),
   createActiveVisionProvider: async () => ({
-    planHeroV2: (...args: unknown[]) => planHeroV2Mock(...args),
     reviewHero: (...args: unknown[]) => reviewHeroMock(...args),
   }),
 }));
@@ -36,11 +32,16 @@ vi.mock('@/server/image/sharp', async (original) => ({
   makeVisionPreview: (...args: unknown[]) => previewMock(...args),
 }));
 vi.mock('@/server/workspaces/service', () => ({ getWorkspace: workspaceMock }));
+vi.mock('@/server/hero-workflow/plan-store', () => ({
+  getHeroPlanRecord: (...args: unknown[]) => getHeroPlanRecordMock(...args),
+  isHeroPlanRecordFresh: () => true,
+}));
 
 import { runHeroTask } from './hero';
 
 const ASSET_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const workspaceId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const PLAN_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 let root = '';
 let pngBuffer: Buffer;
 
@@ -58,17 +59,23 @@ const plan: HeroPlanV2 = {
   prompt: 'A warm morning tabletop hero.',
 };
 
+const planRecord: HeroPlanRecord = {
+  id: PLAN_ID,
+  workspaceId,
+  sourceAssetId: ASSET_ID,
+  sourceAssetRole: 'front',
+  ratio: '1:1',
+  creativeMode: 'recommended',
+  humanPolicy: 'auto',
+  creativeLevel: 'balanced',
+  createdAt: '2026-08-25T00:00:00.000Z',
+  plan,
+};
+
 const reviewPass: HeroReview = { passed: true, score: 82, issues: [], summary: '结构一致，适合电商主图' };
 const reviewFail: HeroReview = { passed: false, score: 35, issues: ['杯柄结构错误'], summary: '商品结构失真' };
 
 const asset = { id: ASSET_ID, name: 'cup.png', mimeType: 'image/png' as const, width: 100, height: 100, role: 'front' as const, createdAt: '2026-08-25T00:00:00.000Z' };
-const intelligence: ProductIntelligenceRecord = {
-  analysis: { category: '杯子', visualSummary: '白色杯身', visibleFacts: [], visibleText: [], unverifiedFacts: [], assetObservations: [] },
-  plan: { heroConcepts: [], collage: { titleOptions: [], sellingPoints: [] } },
-  schemaVersion: 3,
-  analyzedAt: '2026-08-25T00:00:00.000Z',
-  assetSnapshot: [{ id: ASSET_ID, role: 'front' }],
-};
 
 function request(count = 1, options: Record<string, unknown> = {}): CreateTaskRequest {
   return {
@@ -81,6 +88,7 @@ function request(count = 1, options: Record<string, unknown> = {}): CreateTaskRe
       creativeMode: 'recommended',
       humanPresence: 'auto',
       creativeLevel: 'balanced',
+      planId: PLAN_ID,
       ...options,
     },
   } as CreateTaskRequest;
@@ -89,12 +97,12 @@ function request(count = 1, options: Record<string, unknown> = {}): CreateTaskRe
 function stubSuccessPipeline(reviews: HeroReview[] = [reviewPass]) {
   workspaceMock.mockResolvedValue({ name: '杯子' });
   listAssetsMock.mockResolvedValue([asset]);
-  intelligenceMock.mockResolvedValue(null);
+  getHeroPlanRecordMock.mockResolvedValue(planRecord);
   previewMock.mockResolvedValue(Buffer.from('preview'));
-  planHeroV2Mock.mockResolvedValue(plan);
   generateMock.mockResolvedValue(reviews.map((_item, index) => ({ url: `https://cdn.example/${index + 1}.png` })));
   reviewHeroMock.mockReset();
   for (const review of reviews) reviewHeroMock.mockResolvedValueOnce(review);
+  reviewHeroMock.mockResolvedValue(reviews[reviews.length - 1]);
   vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(pngBuffer), { status: 200 })));
 }
 
@@ -107,16 +115,10 @@ afterAll(async () => { delete process.env.RUNTIME_DIR; await fs.rm(root, { recur
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe('Hero 工作流任务集成', () => {
-  it('AI 推荐方案模式跑通：策划注入偏好，最终 prompt 来自 HeroPlanV2', async () => {
+  it('使用已策划方案执行生成与审片，不再调用 planHeroV2', async () => {
     assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
     stubSuccessPipeline();
     const result = await runHeroTask(workspaceId, request(1, { humanPresence: 'avoid', creativeLevel: 'creative' }), cryptoId());
-    expect(planHeroV2Mock).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceName: '杯子',
-      humanPolicy: 'avoid',
-      creativeLevel: 'creative',
-      creativeIntent: undefined,
-    }));
     expect(generateMock).toHaveBeenCalledWith(expect.objectContaining({
       imagePath: 'selected.png',
       ratio: '1:1',
@@ -130,54 +132,43 @@ describe('Hero 工作流任务集成', () => {
     expect(JSON.stringify(result)).not.toContain('.runtime');
   });
 
-  it('自定义想法模式把用户创意原样注入策划', async () => {
-    assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
-    stubSuccessPipeline();
-    await runHeroTask(workspaceId, request(1, { creativeMode: 'custom', creativeIntent: '雨夜归家的一刻' }), cryptoId());
-    expect(planHeroV2Mock).toHaveBeenCalledWith(expect.objectContaining({ creativeIntent: '雨夜归家的一刻' }));
+  it('无 planId 时立即失败', async () => {
+    await expect(runHeroTask(workspaceId, request(1, { planId: undefined }), cryptoId())).rejects.toThrow(/先获取 AI 方案/);
   });
 
-  it('覆盖当前源图的新鲜分析作为商品理解复用，不再触发大分析', async () => {
+  it('planId 不匹配时失败', async () => {
     assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
-    stubSuccessPipeline();
-    intelligenceMock.mockResolvedValue(intelligence);
-    await runHeroTask(workspaceId, request(), cryptoId());
-    expect(planHeroV2Mock).toHaveBeenCalledWith(expect.objectContaining({ productUnderstanding: '白色杯身' }));
+    getHeroPlanRecordMock.mockResolvedValue(planRecord);
+    await expect(runHeroTask(workspaceId, request(1, { planId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }), cryptoId())).rejects.toThrow(/方案已失效/);
   });
 
-  it('陈旧或未覆盖源图的分析不作为策划上下文', async () => {
-    assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
-    stubSuccessPipeline();
-    intelligenceMock.mockResolvedValue({
-      ...intelligence,
-      assetSnapshot: [{ id: ASSET_ID, role: 'detail' }],
-    });
-    await runHeroTask(workspaceId, request(), cryptoId());
-    expect(planHeroV2Mock).toHaveBeenCalledWith(expect.objectContaining({ productUnderstanding: undefined }));
+  it('无 plan record 时失败', async () => {
+    getHeroPlanRecordMock.mockResolvedValue(null);
+    await expect(runHeroTask(workspaceId, request(), cryptoId())).rejects.toThrow(/方案已失效/);
   });
 
-  it('审片全部不通过时任务失败且不产出结果', async () => {
+  it('审片全部不通过时任务失败', async () => {
     assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
     stubSuccessPipeline([reviewFail]);
-    await expect(runHeroTask(workspaceId, request(), cryptoId())).rejects.toThrow(/未通过审片/);
+    await expect(runHeroTask(workspaceId, request(), cryptoId())).rejects.toThrow(/审片后仅有/);
   });
 
-  it('部分通过时只保留通过结果', async () => {
+  it('部分通过时补生成直到满足数量', async () => {
     assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
-    stubSuccessPipeline([reviewFail, reviewPass]);
+    workspaceMock.mockResolvedValue({ name: '杯子' });
+    listAssetsMock.mockResolvedValue([asset]);
+    getHeroPlanRecordMock.mockResolvedValue(planRecord);
+    previewMock.mockResolvedValue(Buffer.from('preview'));
+    generateMock
+      .mockResolvedValueOnce([{ url: 'https://cdn.example/1.png' }, { url: 'https://cdn.example/2.png' }])
+      .mockResolvedValueOnce([{ url: 'https://cdn.example/3.png' }]);
+    reviewHeroMock.mockReset();
+    reviewHeroMock.mockResolvedValueOnce(reviewFail).mockResolvedValueOnce(reviewPass);
+    reviewHeroMock.mockResolvedValueOnce(reviewPass);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(pngBuffer), { status: 200 })));
     const result = await runHeroTask(workspaceId, request(2), cryptoId());
-    expect(reviewHeroMock).toHaveBeenCalledTimes(2);
-    expect(result.outputs).toHaveLength(1);
-    expect((result.outputs[0] as { kind: 'image'; url: string }).url).toContain('result-01');
-  });
-
-  it('策划失败不会进入生图', async () => {
-    assetFileMock.mockResolvedValue({ buffer: pngBuffer, mimeType: 'image/png', filePath: 'selected.png' });
-    stubSuccessPipeline();
-    planHeroV2Mock.mockRejectedValue(new Error('planning failed'));
-    await expect(runHeroTask(workspaceId, request(), cryptoId())).rejects.toThrow('planning failed');
-    expect(generateMock).not.toHaveBeenCalled();
-    expect(reviewHeroMock).not.toHaveBeenCalled();
+    expect(result.outputs).toHaveLength(2);
+    expect(generateMock).toHaveBeenCalledTimes(2);
   });
 });
 

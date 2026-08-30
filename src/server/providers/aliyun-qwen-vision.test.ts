@@ -13,7 +13,7 @@ const strictConfig: ResolvedVisionConfig = { profileId: 'aaaaaaaa-aaaa-4aaa-8aaa
 const customConfig = { ...strictConfig, model: 'stored-vision-model' };
 const payload = {
   analysis: { category: '包', visualSummary: '白色包', visibleFacts: [], visibleText: [], unverifiedFacts: [], assetObservations: [{ assetId, suggestedRole: 'front', quality: 'good', note: '清晰' }] },
-  plan: { heroConcepts: [{ id: 'hero-1', title: '通勤场景', recommendedSourceAssetId: assetId, creativeBrief: '自然通勤画面', prompt: 'Natural commute scene.', reason: '突出商品' }], collage: { titleOptions: [], sellingPoints: [] } },
+  plan: { collage: { titleOptions: [], sellingPoints: [] } },
 };
 const analysisInput = () => ({ workspaceId, workspaceName: '商品', assets: [{ assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('image') }] });
 const heroInput = () => ({ workspaceId, workspaceName: '商品', asset: { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('selected-image') } });
@@ -82,11 +82,9 @@ describe('OpenAI 兼容识图 Provider', () => {
     const analysis = (schema.properties as Record<string, Record<string, unknown>>).analysis;
     expect(analysis).toMatchObject({ required: ['category', 'visualSummary', 'visibleFacts', 'visibleText', 'unverifiedFacts', 'assetObservations'], additionalProperties: false });
     const plan = (schema.properties as Record<string, Record<string, unknown>>).plan;
-    expect(plan).toMatchObject({ required: ['heroConcepts', 'collage'], additionalProperties: false });
+    expect(plan).toMatchObject({ required: ['collage'], additionalProperties: false });
     const evidenceItems = ((((analysis.properties as Record<string, Record<string, unknown>>).visibleFacts.items as Record<string, Record<string, unknown>>).properties.evidenceAssetIds as Record<string, Record<string, unknown>>).items);
     expect(evidenceItems.enum).toEqual([assetId]);
-    const heroProperties = ((plan.properties as Record<string, Record<string, unknown>>).heroConcepts.items as Record<string, Record<string, unknown>>).properties as Record<string, Record<string, unknown>>;
-    expect((heroProperties.recommendedSourceAssetId as Record<string, unknown>).enum).toEqual([assetId]);
 
     const getCustom = responseBody();
     await new AliyunQwenVisionProvider(customConfig).analyze(analysisInput());
@@ -94,16 +92,16 @@ describe('OpenAI 兼容识图 Provider', () => {
     expect((await lastLog()).normalization).toBeUndefined();
   });
 
-  it('参考图可进入分析但不能作为严格 Hero 源', () => {
+  it('参考图可进入分析但不能作为事实证据', () => {
     const schema = buildProductIntelligenceJsonSchema({ workspaceId, workspaceName: '商品', assets: [
       { assetId, role: 'front', mimeType: 'image/jpeg', buffer: Buffer.from('image') },
       { assetId: referenceId, role: 'reference', mimeType: 'image/jpeg', buffer: Buffer.from('reference') },
     ] });
     const rootProperties = schema.properties as Record<string, Record<string, unknown>>;
-    const heroProps = (((rootProperties.plan.properties as Record<string, Record<string, unknown>>).heroConcepts.items as Record<string, Record<string, unknown>>).properties);
-    expect((heroProps.recommendedSourceAssetId as Record<string, unknown>).enum).toEqual([assetId]);
     const observations = ((rootProperties.analysis.properties as Record<string, Record<string, unknown>>).assetObservations.items as Record<string, Record<string, unknown>>).properties.assetId;
     expect((observations as Record<string, unknown>).enum).toEqual([assetId, referenceId]);
+    const evidenceItems = ((((rootProperties.analysis.properties as Record<string, Record<string, unknown>>).visibleFacts.items as Record<string, Record<string, unknown>>).properties.evidenceAssetIds as Record<string, Record<string, unknown>>).items);
+    expect(evidenceItems.enum).toEqual([assetId, referenceId]);
   });
 
   it('Hero planning 使用严格 Schema 与精确配置', async () => {
