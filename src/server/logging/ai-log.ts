@@ -21,6 +21,11 @@ export interface AIRequestLog {
   taskId?: string;
   profileId?: string;
 
+  /** Benchmark Lab 追踪（可选，仅 Lab 请求携带） */
+  benchmarkRunId?: string;
+  benchmarkScenario?: string;
+  benchmarkLane?: string;
+
   driver?: string;
   model?: string;
   endpoint?: string;

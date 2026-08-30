@@ -4,9 +4,13 @@ import path from 'node:path';
 import { writeAIRequestLog } from '@/server/logging/ai-log';
 import type { ResolvedImageConfig } from '@/server/settings/ai';
 import type { GeneratedImage, ImageGenerationInput, ImageProvider } from './image-provider';
-import { ProviderConfigError, ProviderRequestError, providerFetchError, providerHttpError } from './provider-errors';
+import { ProviderCapabilityError, ProviderConfigError, ProviderRequestError, providerFetchError, providerHttpError } from './provider-errors';
 
-/** 火山方舟图片协议只支持单张循环；每张一次 HTTP 请求 = 一个独立日志文件。 */
+/**
+ * 火山方舟图片协议只支持单张循环；每张一次 HTTP 请求 = 一个独立日志文件。
+ * 当前可访问的 Ark images/generations 路由只接受单个 image 字段，
+ * 无真实多参考图与 edit region 能力：不伪装，抛 ProviderCapabilityError。
+ */
 
 const MIME_BY_EXT: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
@@ -23,12 +27,33 @@ function resolveSize(config: ResolvedImageConfig, ratio: ImageGenerationInput['r
 export class VolcengineArkImageProvider implements ImageProvider {
   constructor(private readonly config: ResolvedImageConfig) {}
 
+  capabilities() {
+    return {
+      supportsMultipleReferences: false,
+      maxReferenceImages: 0,
+      supportsEditRegions: false,
+      supportsPromptEnhancementOverride: false,
+    };
+  }
+
   async generate(input: ImageGenerationInput): Promise<GeneratedImage[]> {
     if (!this.config.compatibility.referenceImage) {
       throw new ProviderConfigError('当前图片模型不支持参考图输入，不能用于氛围主图。');
     }
 
     // ── Capability validation (before any HTTP request) ──
+
+    // 多参考图：当前 Ark 图片路由无真实支持，不用 prompt 文本伪装，显式拒绝。
+    if ((input.referenceImagePaths?.length ?? 0) > 0) {
+      throw new ProviderCapabilityError(
+        '火山方舟图片当前路由不支持多参考图输入，对应 Benchmark lane 不可用。',
+      );
+    }
+
+    // 请求级扩写覆盖：Ark 无此能力，显式 off 之外的要求都拒绝。
+    if (input.promptEnhancement === 'on') {
+      throw new ProviderCapabilityError('火山方舟图片 adapter 当前不支持提示词扩写。');
+    }
 
     // batchMode: Ark only supports single-loop. auto resolves to single.
     const batchMode = this.config.compatibility.batchMode;
@@ -100,7 +125,16 @@ export class VolcengineArkImageProvider implements ImageProvider {
       requestBody: bodyPayload,
       ...(event.responseBody !== undefined ? { responseBody: event.responseBody } : {}),
       redact: [this.config.apiKey],
-      extra: { batchMode: 'single', count: 1, ratio: input.ratio },
+      extra: {
+        batchMode: 'single', count: 1, ratio: input.ratio,
+        ...(input.benchmarkTrace
+          ? {
+            benchmarkRunId: input.benchmarkTrace.runId,
+            benchmarkScenario: input.benchmarkTrace.scenario,
+            benchmarkLane: input.benchmarkTrace.lane,
+          }
+          : {}),
+      },
     });
 
     let response: Response;

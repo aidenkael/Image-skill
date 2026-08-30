@@ -4,16 +4,39 @@ import path from 'node:path';
 import { writeAIRequestLog } from '@/server/logging/ai-log';
 import type { ResolvedImageConfig } from '@/server/settings/ai';
 import type { GeneratedImage, ImageGenerationInput, ImageProvider } from './image-provider';
-import { ProviderConfigError, ProviderRequestError, providerFetchError, providerHttpError } from './provider-errors';
+import { ProviderCapabilityError, ProviderConfigError, ProviderRequestError, providerFetchError, providerHttpError } from './provider-errors';
 
 /**
  * 日志约定：一个实际 provider HTTP 请求 = 一个独立日志文件。
  * 原生批量不可用/提示词扩写不可用等协议降级，各自是新的 HTTP 请求与新文件。
+ * editRegions 不被本协议支持：显式忽略并在 capabilities 中如实声明。
  */
+
+/** DashScope 多模态生成接口输入图上限（含主源图） */
+const MAX_INPUT_IMAGES = 3;
 
 const MIME_BY_EXT: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
 };
+
+function toDataUri(filePath: string, notFoundMessage: string): Promise<string> {
+  return fs.readFile(filePath)
+    .catch(() => { throw new ProviderRequestError(notFoundMessage); })
+    .then((data) => {
+      const ext = path.extname(filePath).slice(1).toLowerCase();
+      const mime = MIME_BY_EXT[ext] ?? 'image/png';
+      return `data:${mime};base64,${data.toString('base64')}`;
+    });
+}
+
+function benchmarkLogExtra(input: ImageGenerationInput): Record<string, unknown> {
+  if (!input.benchmarkTrace) return {};
+  return {
+    benchmarkRunId: input.benchmarkTrace.runId,
+    benchmarkScenario: input.benchmarkTrace.scenario,
+    benchmarkLane: input.benchmarkTrace.lane,
+  };
+}
 
 function resolveSize(config: ResolvedImageConfig, ratio: ImageGenerationInput['ratio']): string | undefined {
   if (config.compatibility.sizeMode === 'provider-default') return undefined;
@@ -23,10 +46,13 @@ function resolveSize(config: ResolvedImageConfig, ratio: ImageGenerationInput['r
   return size;
 }
 
-function resolvePromptExtend(config: ResolvedImageConfig): boolean | undefined {
-  const mode = config.compatibility.promptEnhancement;
+function resolvePromptExtend(
+  config: ResolvedImageConfig,
+  override?: ImageGenerationInput['promptEnhancement'],
+): boolean | undefined {
+  const mode = override ?? config.compatibility.promptEnhancement;
   if (mode === 'on') return true;
-  if (mode === 'off') return undefined;
+  if (mode === 'off') return undefined; // off 不得被静默改写为 true，这是真实实验变量
   // auto: send true (recommended for DashScope)
   return true;
 }
@@ -94,17 +120,43 @@ class ExtractError extends Error {
 export class DashScopeImageProvider implements ImageProvider {
   constructor(private readonly config: ResolvedImageConfig) {}
 
+  capabilities() {
+    return {
+      supportsMultipleReferences: true,
+      maxReferenceImages: MAX_INPUT_IMAGES - 1,
+      supportsEditRegions: false,
+      supportsPromptEnhancementOverride: true,
+    };
+  }
+
   async generate(input: ImageGenerationInput): Promise<GeneratedImage[]> {
     if (!this.config.compatibility.referenceImage) {
       throw new ProviderConfigError('当前图片模型不支持参考图输入，不能用于氛围主图。');
     }
 
-    let imageData: Buffer;
-    try { imageData = await fs.readFile(input.imagePath); }
-    catch { throw new ProviderRequestError('无法读取源商品图片，请重新选择后重试。'); }
-    const ext = path.extname(input.imagePath).slice(1).toLowerCase();
-    const mime = MIME_BY_EXT[ext] ?? 'image/png';
-    const imageUri = `data:${mime};base64,${imageData.toString('base64')}`;
+    const referencePaths = input.referenceImagePaths ?? [];
+    if (referencePaths.length > MAX_INPUT_IMAGES - 1) {
+      throw new ProviderCapabilityError(
+        `DashScope 图像协议最多支持 ${MAX_INPUT_IMAGES} 张输入图（含源图），当前传入了 ${referencePaths.length + 1} 张。`,
+      );
+    }
+
+    let imageUri: string;
+    try { imageUri = await toDataUri(input.imagePath, '无法读取源商品图片，请重新选择后重试。'); }
+    catch (error) {
+      if (error instanceof ProviderRequestError) throw error;
+      throw new ProviderRequestError('无法读取源商品图片，请重新选择后重试。');
+    }
+    const referenceUris: string[] = [];
+    for (const refPath of referencePaths) {
+      referenceUris.push(await toDataUri(refPath, '无法读取参考图片，请重新选择后重试。'));
+    }
+    const contentItems: Array<Record<string, string>> = [
+      { image: imageUri },
+      ...referenceUris.map((uri) => ({ image: uri })),
+      { text: input.prompt },
+    ];
+
     const size = resolveSize(this.config, input.ratio);
     const batchMode = this.config.compatibility.batchMode;
 
@@ -112,16 +164,16 @@ export class DashScopeImageProvider implements ImageProvider {
 
     if (useNativeBatch) {
       try {
-        return await this.generateNative(input, imageUri, size);
+        return await this.generateNative(input, contentItems, size);
       } catch (error) {
         if (error instanceof BatchUnsupportedError && batchMode === 'auto') {
-          return this.generateSingle(input, imageUri, size);
+          return this.generateSingle(input, contentItems, size);
         }
         throw error;
       }
     }
 
-    return this.generateSingle(input, imageUri, size);
+    return this.generateSingle(input, contentItems, size);
   }
 
   /** 为一次实际 HTTP 请求构造一次性日志写入函数。 */
@@ -161,8 +213,8 @@ export class DashScopeImageProvider implements ImageProvider {
    * Throws PromptExtendUnsupportedError when the protocol rejects prompt_extend.
    */
   private async requestSingle(
-    imageUri: string,
-    prompt: string,
+    input: ImageGenerationInput,
+    contentItems: Array<Record<string, string>>,
     size: string | undefined,
     promptExtend: boolean | undefined,
   ): Promise<GeneratedImage> {
@@ -172,13 +224,13 @@ export class DashScopeImageProvider implements ImageProvider {
 
     const payload = {
       model: this.config.model,
-      input: { messages: [{ role: 'user', content: [{ image: imageUri }, { text: prompt }] }] },
+      input: { messages: [{ role: 'user', content: contentItems }] },
       parameters,
     };
 
     const requestId = crypto.randomUUID();
     const started = Date.now();
-    const log = this.requestLogger(requestId, started, { batchMode: 'single', count: 1 });
+    const log = this.requestLogger(requestId, started, { batchMode: 'single', count: 1, ...benchmarkLogExtra(input) });
 
     let response: Response;
     try {
@@ -224,24 +276,25 @@ export class DashScopeImageProvider implements ImageProvider {
 
   private async generateSingle(
     input: ImageGenerationInput,
-    imageUri: string,
+    contentItems: Array<Record<string, string>>,
     size: string | undefined,
   ): Promise<GeneratedImage[]> {
     const results: GeneratedImage[] = [];
-    let usePromptExtend = resolvePromptExtend(this.config);
+    const effectiveEnhancement = input.promptEnhancement ?? this.config.compatibility.promptEnhancement;
+    let usePromptExtend = resolvePromptExtend(this.config, input.promptEnhancement);
 
     for (let index = 0; index < input.count; index += 1) {
       try {
-        const image = await this.requestSingle(imageUri, input.prompt, size, usePromptExtend);
+        const image = await this.requestSingle(input, contentItems, size, usePromptExtend);
         results.push(image);
       } catch (error) {
         if (error instanceof PromptExtendUnsupportedError) {
-          if (this.config.compatibility.promptEnhancement !== 'auto') {
+          if (effectiveEnhancement !== 'auto') {
             throw new ProviderConfigError('提示词扩写功能不被当前图片模型支持，请将 promptEnhancement 改为 auto 或 off。');
           }
           // auto: drop prompt_extend, retry current image, continue rest without it
           usePromptExtend = undefined;
-          const retryImage = await this.requestSingle(imageUri, input.prompt, size, undefined);
+          const retryImage = await this.requestSingle(input, contentItems, size, undefined);
           results.push(retryImage);
         } else {
           throw error;
@@ -257,23 +310,23 @@ export class DashScopeImageProvider implements ImageProvider {
 
   private async generateNative(
     input: ImageGenerationInput,
-    imageUri: string,
+    contentItems: Array<Record<string, string>>,
     size: string | undefined,
   ): Promise<GeneratedImage[]> {
-    const promptExtend = resolvePromptExtend(this.config);
+    const promptExtend = resolvePromptExtend(this.config, input.promptEnhancement);
     const parameters: Record<string, unknown> = { n: input.count };
     if (promptExtend !== undefined) parameters.prompt_extend = promptExtend;
     if (size) parameters.size = size;
 
     const payload = {
       model: this.config.model,
-      input: { messages: [{ role: 'user', content: [{ image: imageUri }, { text: input.prompt }] }] },
+      input: { messages: [{ role: 'user', content: contentItems }] },
       parameters,
     };
 
     const requestId = crypto.randomUUID();
     const started = Date.now();
-    const log = this.requestLogger(requestId, started, { batchMode: 'native', count: input.count });
+    const log = this.requestLogger(requestId, started, { batchMode: 'native', count: input.count, ...benchmarkLogExtra(input) });
 
     let response: Response;
     try {
@@ -304,11 +357,12 @@ export class DashScopeImageProvider implements ImageProvider {
       });
       if (batchRejected) throw new BatchUnsupportedError();
       if (promptExtendRejected) {
-        if (this.config.compatibility.promptEnhancement === 'on') {
+        const effectiveEnhancement = input.promptEnhancement ?? this.config.compatibility.promptEnhancement;
+        if (effectiveEnhancement !== 'auto') {
           throw new ProviderConfigError('提示词扩写功能不被当前图片模型支持，请将 promptEnhancement 改为 auto 或 off。');
         }
         // auto: retry native without prompt_extend (new HTTP request, new log file)
-        return this.generateNativeWithoutPromptExtend(input, imageUri, size);
+        return this.generateNativeWithoutPromptExtend(input, contentItems, size);
       }
       console.error(`[ai] image-generation failed requestId=${requestId.slice(0, 8)}`);
       throw providerHttpError(response.status);
@@ -330,7 +384,7 @@ export class DashScopeImageProvider implements ImageProvider {
 
   private async generateNativeWithoutPromptExtend(
     input: ImageGenerationInput,
-    imageUri: string,
+    contentItems: Array<Record<string, string>>,
     size: string | undefined,
   ): Promise<GeneratedImage[]> {
     const parameters: Record<string, unknown> = { n: input.count };
@@ -338,13 +392,13 @@ export class DashScopeImageProvider implements ImageProvider {
 
     const payload = {
       model: this.config.model,
-      input: { messages: [{ role: 'user', content: [{ image: imageUri }, { text: input.prompt }] }] },
+      input: { messages: [{ role: 'user', content: contentItems }] },
       parameters,
     };
 
     const requestId = crypto.randomUUID();
     const started = Date.now();
-    const log = this.requestLogger(requestId, started, { batchMode: 'native', count: input.count });
+    const log = this.requestLogger(requestId, started, { batchMode: 'native', count: input.count, ...benchmarkLogExtra(input) });
 
     let response: Response;
     try {

@@ -1,5 +1,10 @@
 import type { AssetRole } from '@/core/assets';
 import type {
+  BenchmarkJudgeResult,
+  BenchmarkScenario,
+  ReferencePackPlan,
+} from '@/core/benchmark-lab';
+import type {
   HeroBatchReview,
   HeroBrief,
   HeroHumanPolicy,
@@ -45,7 +50,30 @@ export interface HeroBatchReviewInput {
 }
 
 /**
- * Vision 能力统一接口：商品分析、Hero 摄影策划（Director）、Hero 批量质检。
+ * Benchmark Lab Reference Pack 规划输入：只看源商品图，识别最易被生成破坏的身份细节。
+ * 独立 R&D 域，不消费正式 Workspace/Intelligence 数据。
+ */
+export interface BenchmarkReferencePackPlanInput {
+  runId: string;
+  sourceBuffer: Buffer;
+}
+
+/**
+ * Benchmark Lab Judge 输入：源图 + 参考裁剪 + 全部候选一次进入 Vision。
+ */
+export interface BenchmarkJudgeInput {
+  runId: string;
+  scenario: BenchmarkScenario;
+  /** 确定性场景目标文本，供 judge 理解候选应处的物理状态 */
+  scenarioGoal: string;
+  sourceBuffer: Buffer;
+  cropBuffers: Buffer[];
+  candidateBuffers: Buffer[];
+}
+
+/**
+ * Vision 能力统一接口：商品分析、Hero 摄影策划（Director）、Hero 批量质检，
+ * 以及 Benchmark Lab 的 Reference Pack 规划与候选判定。
  */
 export interface VisionProvider {
   analyze(input: ProductIntelligenceInput): Promise<ProductIntelligencePayload>;
@@ -53,4 +81,8 @@ export interface VisionProvider {
   directHero(input: HeroDirectorInput): Promise<HeroBrief>;
 
   reviewHeroBatch(input: HeroBatchReviewInput): Promise<HeroBatchReview>;
+
+  planBenchmarkReferencePack(input: BenchmarkReferencePackPlanInput): Promise<ReferencePackPlan>;
+
+  judgeBenchmarkCandidates(input: BenchmarkJudgeInput): Promise<BenchmarkJudgeResult[]>;
 }

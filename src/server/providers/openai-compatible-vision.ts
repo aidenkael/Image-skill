@@ -1,10 +1,16 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import {
+  BenchmarkJudgeResultSchema,
+  ReferencePackPlanSchema,
+} from '@/core/benchmark-lab';
 import { HeroBatchReviewSchema, heroBriefSchemaForHumanPolicy } from '@/core/hero-workflow';
 import { ProductIntelligencePayloadSchema } from '@/core/intelligence';
 import { writeAIRequestLog, type AIRequestLog } from '@/server/logging/ai-log';
 import type { ResolvedVisionConfig } from '@/server/settings/ai';
 import type {
+  BenchmarkJudgeInput,
+  BenchmarkReferencePackPlanInput,
   HeroBatchReviewInput,
   HeroDirectorInput,
   ProductIntelligenceInput,
@@ -161,7 +167,75 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error';
 }
 
-type StructuredOperation = 'product-intelligence' | 'hero-director' | 'hero-batch-review';
+/* ── Benchmark Lab（独立 R&D 域，不复用 Hero QA 语义） ── */
+
+const BENCHMARK_SYSTEM_PROMPT = `You are a strict product-consistency evaluator for ecommerce image-generation experiments.
+Return exactly one object matching the supplied JSON Schema, with no markdown.
+Output every required field. Use [] when a required list has no items.
+Be strict about product structure, topology and physics; never reward beauty alone.
+All human-readable notes/labels/reasons must be Simplified Chinese.`;
+
+function benchmarkReferencePackInstruction(): string {
+  return [
+    'Inspect the product image.',
+    'Identify the 0 to 3 most important local visual regions that should be preserved to maintain product identity in downstream image generation.',
+    'Prefer components that are easily corrupted by AI, such as:',
+    '- straps, chains, cords, or flexible connectors',
+    '- logos, labels, visible text, prints or patterns',
+    '- hardware, closures, decorative focal parts',
+    '- face/details for figurines or complex objects',
+    'Do not classify by product category. Think from product identity risk.',
+    'Return normalized crop boxes only: x/y/width/height in [0,1] relative to the full image.',
+    'Each box must tightly enclose one region, must not cover the entire image, and boxes must not be near-duplicates.',
+    'Return an empty crops array when no high-risk region exists.',
+    'summary: one short Simplified-Chinese sentence describing the product identity risks.',
+    'label and reason must be Simplified Chinese.',
+  ].join('\n');
+}
+
+function benchmarkJudgeInstruction(input: BenchmarkJudgeInput): string {
+  const cropCount = input.cropBuffers.length;
+  const candidateCount = input.candidateBuffers.length;
+  const lastIndex = candidateCount - 1;
+  return [
+    `Image 1 is the original source product photo. Images 2 to ${cropCount + 1} are reference detail crops. Images ${cropCount + 2} to ${cropCount + 1 + candidateCount} are generated candidates, indexed 0 to ${lastIndex} in order.`,
+    `Benchmark scenario goal: ${input.scenarioGoal}`,
+    'Judge each candidate independently as PASS or FAIL by listing hard failures. No beauty score. No ranking.',
+    'Allowed (NOT failures):',
+    '- flexible parts (straps/chains/cords/fabric) changing curve/pose/settle under gravity or use, while keeping quantity, attachment points and plausible length',
+    '- product orientation changing',
+    '- reasonable unseen-angle inference',
+    'Not allowed (hard failures):',
+    '- extra chain/strap/cord/part (part_added)',
+    '- missing part (part_missing)',
+    '- chain split into multiple chains or parts merged (topology_broken)',
+    '- materially longer/shorter connector (proportion_wrong)',
+    '- connector attached to a new place (attachment_wrong)',
+    '- quantity changed (quantity_changed)',
+    '- product identity/material/color/shape changed (product_identity_changed)',
+    '- visible text/logo/pattern corrupted (text_logo_pattern_corrupted)',
+    '- unsupported floating flexible parts or impossible physics (unreasonable_gravity)',
+    '- person touching/carrying product in an impossible way (impossible_human_contact)',
+    '- severe generation artifact (severe_generation_artifact)',
+    `Return exactly one result per candidate covering candidateIndex 0 to ${lastIndex}, each index exactly once. hardFailures empty means PASS.`,
+    'notes: one short Simplified-Chinese sentence per candidate explaining the judgment, or null.',
+  ].join('\n');
+}
+
+function jpegContent(buffer: Buffer): Record<string, unknown> {
+  return { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${buffer.toString('base64')}` } };
+}
+
+type StructuredOperation =
+  | 'product-intelligence'
+  | 'hero-director'
+  | 'hero-batch-review'
+  | 'benchmark-reference-pack'
+  | 'benchmark-judge';
+
+type StructuredLogContext = Partial<Pick<AIRequestLog,
+  'workspaceId' | 'taskId' | 'benchmarkRunId' | 'benchmarkScenario'
+>>;
 
 type AttemptLogInput = Pick<AIRequestLog, 'status' | 'httpStatus' | 'durationMs'> &
   Partial<Pick<AIRequestLog, 'failureStage' | 'errorName' | 'errorMessage' | 'requestBody' | 'responseBody' | 'parsedResult'>> &
@@ -173,7 +247,7 @@ export class OpenAICompatibleVisionProvider implements VisionProvider {
   async analyze(input: ProductIntelligenceInput) {
     const jsonSchema = buildProductIntelligenceJsonSchema(input);
     return this.requestStructured({
-      input,
+      logContext: { workspaceId: input.workspaceId },
       operation: 'product-intelligence',
       system: SYSTEM_PROMPT,
       user: userPrompt(input),
@@ -192,7 +266,7 @@ export class OpenAICompatibleVisionProvider implements VisionProvider {
     // structured output、协议 fallback 与 schema retry 自动遵守同一约束。
     const schema = heroBriefSchemaForHumanPolicy(input.humanPolicy);
     return this.requestStructured({
-      input,
+      logContext: { workspaceId: input.workspaceId, taskId: input.taskId },
       operation: 'hero-director',
       user: directHeroInstruction(input),
       content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.asset.buffer.toString('base64')}` } }],
@@ -211,7 +285,7 @@ export class OpenAICompatibleVisionProvider implements VisionProvider {
       content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image.buffer.toString('base64')}` } });
     });
     return this.requestStructured({
-      input,
+      logContext: { workspaceId: input.workspaceId, taskId: input.taskId },
       operation: 'hero-batch-review',
       user: reviewHeroBatchInstruction(input),
       content,
@@ -220,13 +294,52 @@ export class OpenAICompatibleVisionProvider implements VisionProvider {
     });
   }
 
+  async planBenchmarkReferencePack(input: BenchmarkReferencePackPlanInput) {
+    return this.requestStructured({
+      logContext: { benchmarkRunId: input.runId },
+      operation: 'benchmark-reference-pack',
+      system: BENCHMARK_SYSTEM_PROMPT,
+      user: benchmarkReferencePackInstruction(),
+      content: [jpegContent(input.sourceBuffer)],
+      schema: ReferencePackPlanSchema,
+      schemaName: 'benchmark_reference_pack',
+    });
+  }
+
+  async judgeBenchmarkCandidates(input: BenchmarkJudgeInput) {
+    const content: Array<Record<string, unknown>> = [
+      { type: 'text', text: 'Image 1: original source product photo.' },
+      jpegContent(input.sourceBuffer),
+    ];
+    input.cropBuffers.forEach((buffer, index) => {
+      content.push({ type: 'text', text: `Reference crop ${index + 1}:` });
+      content.push(jpegContent(buffer));
+    });
+    input.candidateBuffers.forEach((buffer, index) => {
+      content.push({ type: 'text', text: `Candidate ${index}:` });
+      content.push(jpegContent(buffer));
+    });
+    // 根节点包装为对象，兼容 strict json_schema 对对象根的要求。
+    const schema = z.object({ results: z.array(BenchmarkJudgeResultSchema).max(16) });
+    const parsed = await this.requestStructured({
+      logContext: { benchmarkRunId: input.runId, benchmarkScenario: input.scenario },
+      operation: 'benchmark-judge',
+      system: BENCHMARK_SYSTEM_PROMPT,
+      user: benchmarkJudgeInstruction(input),
+      content,
+      schema,
+      schemaName: 'benchmark_judge',
+    });
+    return parsed.results;
+  }
+
   /**
    * 通用结构化输出请求。
    * 每次实际 HTTP 请求一个 requestId 与一个独立日志文件；
    * 同一逻辑操作的协议降级/重试共享一个 traceId。
    */
   private async requestStructured<T extends z.ZodType>(options: {
-    input: ProductIntelligenceInput | HeroDirectorInput | HeroBatchReviewInput;
+    logContext?: StructuredLogContext;
     operation: StructuredOperation;
     system?: string;
     user: string;
@@ -235,13 +348,14 @@ export class OpenAICompatibleVisionProvider implements VisionProvider {
     schemaName: string;
     jsonSchemaOverride?: JsonSchema;
   }): Promise<z.output<T>> {
-    const { input, schema, schemaName, jsonSchemaOverride } = options;
+    const { schema, schemaName, jsonSchemaOverride } = options;
     const traceId = crypto.randomUUID();
-    const taskId = 'taskId' in input ? input.taskId : undefined;
     const logBase = {
       operation: options.operation,
-      workspaceId: input.workspaceId,
-      taskId,
+      ...(options.logContext?.workspaceId ? { workspaceId: options.logContext.workspaceId } : {}),
+      ...(options.logContext?.taskId ? { taskId: options.logContext.taskId } : {}),
+      ...(options.logContext?.benchmarkRunId ? { benchmarkRunId: options.logContext.benchmarkRunId } : {}),
+      ...(options.logContext?.benchmarkScenario ? { benchmarkScenario: options.logContext.benchmarkScenario } : {}),
       profileId: this.config.profileId,
       driver: this.config.driver,
       model: this.config.model,

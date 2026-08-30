@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ResolvedImageConfig } from '@/server/settings/ai';
 import { VolcengineArkImageProvider } from './volcengine-ark-image';
-import { ProviderConfigError } from './provider-errors';
+import { ProviderCapabilityError, ProviderConfigError } from './provider-errors';
 
 let root = '';
 let imagePath = '';
@@ -169,5 +169,36 @@ describe('Volcengine Ark 图片 Provider（模型无关）', () => {
     await expect(new VolcengineArkImageProvider(noRefConfig).generate({ imagePath, prompt: 'hero', ratio: '1:1', count: 1 }))
       .rejects.toThrow(/不支持参考图/);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+});
+
+describe('Volcengine Ark Benchmark 能力真实性', () => {
+  it('多参考图无真实支持：显式不可用错误，不发请求、不用 prompt 伪装', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] })));
+    await expect(new VolcengineArkImageProvider(config).generate({
+      imagePath,
+      prompt: 'hero',
+      ratio: '1:1',
+      count: 1,
+      referenceImagePaths: [path.join(root, 'ref.png')],
+    })).rejects.toThrow(ProviderCapabilityError);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('请求级 promptEnhancement=on 显式拒绝（无此能力）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [{ url: 'https://cdn.example/ok.png' }] })));
+    await expect(new VolcengineArkImageProvider(config).generate({
+      imagePath, prompt: 'hero', ratio: '1:1', count: 1, promptEnhancement: 'on',
+    })).rejects.toThrow(ProviderCapabilityError);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('capabilities 如实声明：无多参考图、无 edit region、无扩写覆盖', () => {
+    expect(new VolcengineArkImageProvider(config).capabilities()).toEqual({
+      supportsMultipleReferences: false,
+      maxReferenceImages: 0,
+      supportsEditRegions: false,
+      supportsPromptEnhancementOverride: false,
+    });
   });
 });

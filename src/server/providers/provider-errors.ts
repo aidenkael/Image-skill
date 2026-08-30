@@ -2,6 +2,9 @@ export class ProviderConfigError extends Error {}
 
 export class ProviderRequestError extends Error {}
 
+/** 当前协议/驱动不支持请求的能力；Benchmark lane 据此显式标记 unavailable，不做伪装。 */
+export class ProviderCapabilityError extends Error {}
+
 export function providerHttpError(status: number): ProviderRequestError {
   if (status === 401 || status === 403) {
     return new ProviderRequestError(
