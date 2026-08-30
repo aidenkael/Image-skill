@@ -24,6 +24,12 @@ export interface AILogEvent {
   assetIds?: string[];
   count?: number;
   ratio?: string;
+  /** Hero workflow 关键信息 */
+  displayMode?: string;
+  humanPolicy?: string;
+  creativeLevel?: string;
+  reviewScore?: number;
+  reviewPassed?: boolean;
   normalization?: 'single-item-array-unwrapped';
   apiKey?: string;
 }

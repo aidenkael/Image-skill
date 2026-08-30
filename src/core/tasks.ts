@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { HeroHumanPolicy } from './hero-workflow';
+import { HeroCreativeLevelSchema, HeroHumanPolicySchema } from './hero-workflow';
 import { TaskResultSchema } from './results';
 
 /**
@@ -14,35 +16,44 @@ export const EXECUTABLE_TASK_KINDS: readonly TaskKind[] = ['hero', 'collage', 'o
 export const HeroRatioSchema = z.enum(['1:1', '3:4', '4:3']);
 export type HeroRatio = z.infer<typeof HeroRatioSchema>;
 
-export const HeroCreativeModeSchema = z.enum(['free', 'concept', 'custom']);
+export const HeroCreativeModeSchema = z.enum(['recommended', 'custom']);
 export type HeroCreativeMode = z.infer<typeof HeroCreativeModeSchema>;
 
-export const HeroHumanPresenceSchema = z.enum(['auto', 'none', 'involved']);
-export type HeroHumanPresence = z.infer<typeof HeroHumanPresenceSchema>;
+export const HeroHumanPresenceSchema = HeroHumanPolicySchema;
+export type HeroHumanPresence = HeroHumanPolicy;
 
-export const HeroTaskOptionsSchema = z.object({
-  sourceAssetId: z.string().min(1),
-  ratio: HeroRatioSchema,
-  creativeMode: HeroCreativeModeSchema.default('free'),
-  conceptId: z.string().max(40).optional(),
-  creativeIntent: z.string().trim().max(500).optional(),
-  humanPresence: HeroHumanPresenceSchema.default('auto'),
-}).superRefine((value, ctx) => {
-  if (value.creativeMode === 'concept' && !value.conceptId) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['conceptId'],
-      message: '请选择一个商品专属创意方向',
-    });
+/** 历史 Hero 选项值映射：free|concept→recommended、none→avoid、involved→require */
+export function normalizeLegacyHeroOptionsValue(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const options = { ...(value as Record<string, unknown>) };
+  if (options.creativeMode === 'free' || options.creativeMode === 'concept') {
+    options.creativeMode = 'recommended';
   }
-  if (value.creativeMode === 'custom' && !value.creativeIntent?.trim()) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['creativeIntent'],
-      message: '请填写你的创作想法',
-    });
-  }
-});
+  if (options.humanPresence === 'none') options.humanPresence = 'avoid';
+  if (options.humanPresence === 'involved') options.humanPresence = 'require';
+  delete options.conceptId;
+  return options;
+}
+
+export const HeroTaskOptionsSchema = z.preprocess(
+  normalizeLegacyHeroOptionsValue,
+  z.object({
+    sourceAssetId: z.string().min(1),
+    ratio: HeroRatioSchema,
+    creativeMode: HeroCreativeModeSchema.default('recommended'),
+    creativeIntent: z.string().trim().max(500).optional(),
+    humanPresence: HeroHumanPresenceSchema.default('auto'),
+    creativeLevel: HeroCreativeLevelSchema.default('balanced'),
+  }).superRefine((value, ctx) => {
+    if (value.creativeMode === 'custom' && !value.creativeIntent?.trim()) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['creativeIntent'],
+        message: '请填写你的创作想法',
+      });
+    }
+  }),
+);
 export type HeroTaskOptions = z.infer<typeof HeroTaskOptionsSchema>;
 
 export const CollageTaskOptionsSchema = z.object({

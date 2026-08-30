@@ -18,6 +18,37 @@ const payload = {
 const analysisInput = () => ({ workspaceId, workspaceName: '商品', assets: [{ assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('image') }] });
 const heroInput = () => ({ workspaceId, workspaceName: '商品', asset: { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('selected-image') } });
 
+const planV2Payload = {
+  title: '晨光桌面',
+  displayMode: 'scene-staging',
+  humanPolicy: 'auto',
+  coreSellingAngle: '日常陪伴感',
+  preserve: ['白色杯身', '单件', '陶瓷质感'],
+  flexible: ['光线氛围'],
+  scene: '清晨木桌',
+  composition: '居中微俯',
+  lighting: '柔和自然光',
+  riskChecks: ['杯柄结构', '数量变化'],
+  prompt: 'A warm morning tabletop hero.',
+};
+const reviewPayload = { passed: true, score: 82, issues: [], summary: '结构一致' };
+const planV2Input = () => ({
+  ...heroInput(),
+  humanPolicy: 'avoid' as const,
+  creativeLevel: 'creative' as const,
+  creativeIntent: '雨夜归家',
+  productUnderstanding: '白色杯身',
+});
+const reviewInput = () => ({
+  workspaceId,
+  source: { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('source') },
+  generated: { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('generated') },
+  displayMode: 'human-interaction' as const,
+  humanPolicy: 'require' as const,
+  preserve: ['白色杯身'],
+  flexible: ['光线氛围'],
+});
+
 beforeAll(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'vision-provider-')); process.env.RUNTIME_DIR = path.join(root, '.runtime'); });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => { await fs.rm(root, { recursive: true, force: true }); delete process.env.RUNTIME_DIR; });
@@ -131,5 +162,52 @@ describe('OpenAI 兼容识图 Provider', () => {
   it('HTTP 失败记录安全诊断且保留既有中文错误', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('provider failure', { status: 401 })));
     await expect(new AliyunQwenVisionProvider(strictConfig).analyze(analysisInput())).rejects.toThrow(/Key 无效/);
+  });
+
+  it('planHeroV2 注入人物偏好、创意程度与商品理解，并解析 HeroPlanV2', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(planV2Payload) } }] });
+    }));
+    await expect(new AliyunQwenVisionProvider(customConfig).planHeroV2(planV2Input())).resolves.toEqual(planV2Payload);
+    const body = JSON.stringify(captured);
+    expect(body).toContain('must not include any person');
+    expect(body).toContain('bolder staging');
+    expect(body).toContain('雨夜归家');
+    expect(body).toContain('Product understanding from prior analysis');
+    expect(captured.response_format).toEqual({ type: 'json_object' });
+    await expect(lastLog()).resolves.toMatchObject({ operation: 'vision.hero-plan-v2', status: 'succeeded' });
+  });
+
+  it('planHeroV2 严格模式下所有根字段必填（含可选的 altPrompt）', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(planV2Payload) } }] });
+    }));
+    await new AliyunQwenVisionProvider(strictConfig).planHeroV2(planV2Input());
+    const format = captured.response_format as { type: string; json_schema: { strict: boolean; schema: Record<string, unknown> } };
+    expect(format.type).toBe('json_schema');
+    expect(format.json_schema.strict).toBe(true);
+    expect(format.json_schema.schema).toMatchObject({ additionalProperties: false });
+    expect(format.json_schema.schema.required).toEqual(expect.arrayContaining(['title', 'displayMode', 'preserve', 'prompt', 'altPrompt']));
+  });
+
+  it('reviewHero 提交原图与生成图并解析 HeroReview', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(reviewPayload) } }] });
+    }));
+    await expect(new AliyunQwenVisionProvider(customConfig).reviewHero(reviewInput())).resolves.toEqual(reviewPayload);
+    const content = (captured.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>).find((message) => message.role === 'user')!.content;
+    const images = content.filter((item) => item.type === 'image_url');
+    expect(images).toHaveLength(2);
+    const body = JSON.stringify(captured);
+    expect(body).toContain('human-interaction');
+    expect(body).toContain('白色杯身');
+    expect(body).toContain('score>=70');
+    await expect(lastLog()).resolves.toMatchObject({ operation: 'vision.hero-review', status: 'succeeded' });
   });
 });

@@ -226,6 +226,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .direction-card { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; border: 1px solid #e5e7eb; border-radius: 9px; padding: 10px; background: #fff; color: #374151; text-align: left; cursor: pointer; }
 .direction-card:hover, .direction-card.is-active { border-color: #2563eb; }
 .direction-card.is-active { box-shadow: 0 0 0 1px #2563eb; }
+.direction-card.is-readonly { cursor: default; background: #f8fafc; }
+.direction-card.is-readonly:hover { border-color: #e5e7eb; }
 .direction-card span { color: #6b7280; font-size: 12px; }
 .direction-card small { color: #2563eb; }
 .custom-direction { background: #f8fafc; }

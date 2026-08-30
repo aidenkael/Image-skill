@@ -9,7 +9,7 @@ const validHero = {
   options: {
     sourceAssetId: 'a1',
     ratio: '1:1',
-    creativeMode: 'free',
+    creativeMode: 'recommended',
     humanPresence: 'auto',
   },
 };
@@ -101,19 +101,12 @@ describe('任务请求校验（count 按任务类型限制）', () => {
     ).toThrow(/只能提交一张/);
   });
 
-  it('Hero 三种创作模式按需校验，free 不依赖分析字段', () => {
+  it('Hero 创作模式按需校验，推荐模式不依赖分析字段', () => {
     expect(validateCreateTaskRequest(validHero, ctx).options).toMatchObject({
-      creativeMode: 'free',
+      creativeMode: 'recommended',
       humanPresence: 'auto',
+      creativeLevel: 'balanced',
     });
-    expect(() => validateCreateTaskRequest({
-      ...validHero,
-      options: { ...validHero.options, creativeMode: 'concept' },
-    }, ctx)).toThrow(/请选择一个商品专属创意方向/);
-    expect(validateCreateTaskRequest({
-      ...validHero,
-      options: { ...validHero.options, creativeMode: 'concept', conceptId: 'hero-1' },
-    }, ctx).kind).toBe('hero');
     expect(() => validateCreateTaskRequest({
       ...validHero,
       options: { ...validHero.options, creativeMode: 'custom', creativeIntent: '  ' },
@@ -124,7 +117,35 @@ describe('任务请求校验（count 按任务类型限制）', () => {
     }, ctx).kind).toBe('hero');
   });
 
-  it('旧 scene/person 字段不会进入活动 Hero 选项', () => {
+  it('历史 Hero 选项值被归一化：free→recommended、none→avoid、involved→require', () => {
+    expect(validateCreateTaskRequest({
+      ...validHero,
+      options: { ...validHero.options, creativeMode: 'free' },
+    }, ctx).options).toMatchObject({ creativeMode: 'recommended', creativeLevel: 'balanced' });
+    expect(validateCreateTaskRequest({
+      ...validHero,
+      options: { ...validHero.options, humanPresence: 'none' },
+    }, ctx).options).toMatchObject({ humanPresence: 'avoid' });
+    expect(validateCreateTaskRequest({
+      ...validHero,
+      options: { ...validHero.options, creativeMode: 'concept', conceptId: 'hero-1', humanPresence: 'involved' },
+    }, ctx).options).toMatchObject({ creativeMode: 'recommended', humanPresence: 'require' });
+  });
+
+  it('creativeLevel 三档受控，非法档位被拒绝', () => {
+    for (const level of ['conservative', 'balanced', 'creative']) {
+      expect(validateCreateTaskRequest({
+        ...validHero,
+        options: { ...validHero.options, creativeLevel: level },
+      }, ctx).options).toMatchObject({ creativeLevel: level });
+    }
+    expect(() => validateCreateTaskRequest({
+      ...validHero,
+      options: { ...validHero.options, creativeLevel: 'wild' },
+    }, ctx)).toThrow(TaskValidationError);
+  });
+
+  it('旧 scene/person/conceptId 字段不会进入活动 Hero 选项', () => {
     const parsed = validateCreateTaskRequest({
       ...validHero,
       options: {
@@ -132,11 +153,13 @@ describe('任务请求校验（count 按任务类型限制）', () => {
         sceneMode: 'prompt',
         scenePrompt: '旧场景',
         person: 'hand',
+        conceptId: 'hero-1',
       },
     }, ctx);
     expect(parsed.options).not.toHaveProperty('sceneMode');
     expect(parsed.options).not.toHaveProperty('scenePrompt');
     expect(parsed.options).not.toHaveProperty('person');
+    expect(parsed.options).not.toHaveProperty('conceptId');
   });
 
   it('非法 options（缺必填字段）被拒绝', () => {

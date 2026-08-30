@@ -31,19 +31,16 @@ export function HeroControls({
   onGenerate,
 }: HeroControlsProps) {
   const sourceAsset = assets.find((asset) => asset.id === options.sourceAssetId);
-  const concepts = intelligence?.plan.heroConcepts ?? [];
-  const selectedConcept = concepts.find((concept) => concept.id === options.conceptId);
+  const recommendedConcept = intelligence?.plan.heroConcepts[0] ?? null;
   const blocker = busy
     ? '当前商品的氛围主图正在生成，请等待完成。'
     : !sourceAsset
       ? '请明确选择一张非参考源商品图。'
-      : options.creativeMode === 'concept' && !selectedConcept
-        ? '请选择一个当前商品的专属创意方向。'
-        : options.creativeMode === 'custom' && !options.creativeIntent?.trim()
-          ? '请填写你的创作想法。'
-          : !aiConfigured
-            ? '请先在 AI 设置中选择氛围主图配置'
-            : null;
+      : options.creativeMode === 'custom' && !options.creativeIntent?.trim()
+        ? '请填写你的创作想法。'
+        : !aiConfigured
+          ? '请先在 AI 设置中选择氛围主图配置'
+          : null;
 
   return (
     <div className="controls-body">
@@ -71,37 +68,22 @@ export function HeroControls({
       <div className="field">
         <label className="field-label">创作方式</label>
         <div className="seg">
-          <button type="button" className={`seg-btn${options.creativeMode === 'free' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'free', conceptId: undefined })}>AI 自由创作</button>
-          <button type="button" className={`seg-btn${options.creativeMode === 'concept' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'concept' })}>商品专属方向</button>
-          <button type="button" className={`seg-btn${options.creativeMode === 'custom' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'custom', conceptId: undefined })}>自定义想法</button>
+          <button type="button" className={`seg-btn${options.creativeMode === 'recommended' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'recommended' })}>AI 推荐方案</button>
+          <button type="button" className={`seg-btn${options.creativeMode === 'custom' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'custom' })}>自定义想法</button>
         </div>
-        {options.creativeMode === 'free' ? (
-          <div className="hint">AI 根据商品自行决定画面、镜头、环境与表现方式。</div>
-        ) : null}
-        {options.creativeMode === 'concept' ? (
-          <div className="concept-list">
-            {concepts.map((concept) => (
-              <button
-                key={concept.id}
-                type="button"
-                className={`direction-card${options.conceptId === concept.id ? ' is-active' : ''}`}
-                onClick={() => onChange({
-                  creativeMode: 'concept',
-                  conceptId: concept.id,
-                  ...(options.sourceAssetId ? {} : {
-                    sourceAssetId: concept.recommendedSourceAssetId,
-                  }),
-                })}
-              >
-                <strong>{concept.title}</strong>
-                <span>{concept.creativeBrief}</span>
-                <small>{concept.reason}</small>
-              </button>
-            ))}
-            {concepts.length === 0 ? (
-              <div className="hint">先分析商品获取专属创意方向；也可直接使用 AI 自由创作。</div>
-            ) : null}
-          </div>
+        {options.creativeMode === 'recommended' ? (
+          <>
+            <div className="hint">AI 像商业摄影师一样为商品策划氛围主图：锁定商品身份，自由发挥展示方式。</div>
+            {recommendedConcept ? (
+              <div className="direction-card is-readonly">
+                <strong>AI 推荐展示方案：{recommendedConcept.title}</strong>
+                <span>{recommendedConcept.creativeBrief}</span>
+                <small>{recommendedConcept.reason}</small>
+              </div>
+            ) : (
+              <div className="hint">不分析商品也可以直接生成；AI 会先轻量理解商品再策划。</div>
+            )}
+          </>
         ) : null}
         {options.creativeMode === 'custom' ? (
           <textarea
@@ -115,22 +97,42 @@ export function HeroControls({
       </div>
 
       <div className="field">
-        <label className="field-label">人物参与（可选）</label>
+        <label className="field-label">人物偏好</label>
         <div className="seg">
           {([
-            ['auto', 'AI 决定'],
-            ['none', '不要人物'],
-            ['involved', '需要人物参与'],
+            ['auto', '自动'],
+            ['avoid', '不要人物'],
+            ['require', '需要人物'],
           ] as const).map(([value, label]) => (
             <button key={value} type="button" className={`seg-btn${options.humanPresence === value ? ' is-active' : ''}`} onClick={() => onChange({ humanPresence: value })}>{label}</button>
           ))}
         </div>
         <div className="hint">
-          {options.humanPresence === 'involved'
-            ? '需要人物参与：要求画面有人物参与；具体呈现方式由 AI 决定。'
-            : options.humanPresence === 'none'
-              ? '不要人物：要求画面不出现人物、手部或人体局部。'
-              : 'AI 决定：不限制是否出现人物，由 AI 根据商品与创意判断。'}
+          {options.humanPresence === 'require'
+            ? '需要人物：画面通过手持/佩戴/背负等自然互动展示商品。'
+            : options.humanPresence === 'avoid'
+              ? '不要人物：画面不出现人物、手部或人体局部。'
+              : '自动：由 AI 判断人物参与是否有助于表现商品。'}
+        </div>
+      </div>
+
+      <div className="field">
+        <label className="field-label">创意程度</label>
+        <div className="seg">
+          {([
+            ['conservative', '保守'],
+            ['balanced', '平衡'],
+            ['creative', '创意'],
+          ] as const).map(([value, label]) => (
+            <button key={value} type="button" className={`seg-btn${options.creativeLevel === value ? ' is-active' : ''}`} onClick={() => onChange({ creativeLevel: value })}>{label}</button>
+          ))}
+        </div>
+        <div className="hint">
+          {options.creativeLevel === 'conservative'
+            ? '保守：强调结构保真，只做轻度场景联想。'
+            : options.creativeLevel === 'creative'
+              ? '创意：允许更大胆的场景与表现方式，但商品身份不变。'
+              : '平衡：默认的保真与氛围兼顾。'}
         </div>
       </div>
 

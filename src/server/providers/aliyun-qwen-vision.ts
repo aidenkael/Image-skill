@@ -1,9 +1,16 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import { HeroPlanV2Schema, HeroReviewSchema } from '@/core/hero-workflow';
 import { HeroRuntimePlanSchema, ProductIntelligencePayloadSchema } from '@/core/intelligence';
 import { writeAILog } from '@/server/logging/ai-log';
 import type { ResolvedVisionConfig } from '@/server/settings/ai';
-import type { HeroPlanningInput, ProductIntelligenceInput, ProductIntelligenceProvider } from './vision-provider';
+import type {
+  HeroPlanV2Input,
+  HeroPlanningInput,
+  HeroReviewInput,
+  ProductIntelligenceInput,
+  ProductIntelligenceProvider,
+} from './vision-provider';
 import { invalidProviderResponse, providerFetchError, providerHttpError } from './provider-errors';
 
 export const SYSTEM_PROMPT = `You are an ecommerce product photographer and visual merchandising planner.
@@ -69,6 +76,63 @@ function restrictAssetValue(schema: JsonSchema, assetIds: string[]): void {
 
 export function supportsStrictJsonSchema(model: string): boolean {
   return /^qwen3\.7-plus(?:-|$)/i.test(model.trim());
+}
+
+/** 从 Zod 契约生成严格 JSON Schema response_format；根层字段全部必填，适配可选字段。 */
+export function strictResponseFormat(name: string, schema: z.ZodType): Record<string, unknown> {
+  const json = supportedSchema(z.toJSONSchema(schema));
+  json.additionalProperties = false;
+  const properties = json.properties as JsonSchema | undefined;
+  if (properties) json.required = Object.keys(properties);
+  return { type: 'json_schema', json_schema: { name, strict: true, schema: json } };
+}
+
+const HUMAN_POLICY_INSTRUCTION: Record<HeroPlanV2Input['humanPolicy'], string> = {
+  auto: 'auto: decide yourself whether human presence helps the product story; include it only when it truly adds understanding.',
+  avoid: 'avoid: the final image must not include any person, hand, body part or human figure.',
+  require: 'require: the final image must include meaningful, natural human interaction with the product.',
+};
+
+const CREATIVE_LEVEL_INSTRUCTION: Record<HeroPlanV2Input['creativeLevel'], string> = {
+  conservative: 'conservative: prioritize structural fidelity; keep scene association light and close to a believable product photo.',
+  balanced: 'balanced: default commercial balance between fidelity and atmosphere.',
+  creative: 'creative: bolder staging, mood and expression are welcome, but product identity must never change.',
+};
+
+function planHeroV2Instruction(input: HeroPlanV2Input): string {
+  const parts: string[] = [
+    `You are the lead ecommerce photographer and visual merchandising planner. Plan one atmosphere hero image for the product in the supplied photo.`,
+    `Workspace product: ${input.workspaceName}`,
+    `Before answering, reason about: (1) what is most worth expressing about this product; (2) what state a buyer most needs to see it in at first glance; (3) whether human presence is truly needed to convey scale, usage or wearing effect; (4) what environment enhances the product without stealing focus; (5) which physical/structural details are most prone to hallucination.`,
+    `Do not force multiple directions. Return exactly one JSON object matching the supplied schema: one main plan, plus altPrompt as a second interpretation.`,
+    `title, coreSellingAngle, scene, composition and riskChecks are user-facing Simplified Chinese; preserve/flexible items may be Chinese; prompt and altPrompt must be English generation prompts.`,
+    `preserve must lock the product identity: subject category, core structure/connection, count, dominant colors, dominant material appearance, logo/text/pattern, key hardware or accessories.`,
+    `flexible lists the soft aspects the generation may freely interpret (angle, staging state, scene, composition, camera, light, time of day, mood, whether a person appears).`,
+    `riskChecks lists the structural hallucinations most likely to happen with this product and therefore forbidden.`,
+    `displayMode: scene-staging (staged still life, tabletop or spatial display, hanging, non-human-led presentation) or human-interaction (holding, wearing, carrying, partial body participation).`,
+    `Human presence preference from the user: ${HUMAN_POLICY_INSTRUCTION[input.humanPolicy]}`,
+    `Creative level from the user: ${CREATIVE_LEVEL_INSTRUCTION[input.creativeLevel]}`,
+  ];
+  if (input.productUnderstanding) {
+    parts.push(`Product understanding from prior analysis (visible facts only): ${input.productUnderstanding}`);
+  }
+  if (input.creativeIntent) {
+    parts.push(`User creative intent (preserve it while adapting it to the visible product): ${input.creativeIntent}`);
+  }
+  parts.push('Prioritize commercial usefulness, believable photography and low AI-looking output. Never change product identity.');
+  return parts.join('\n');
+}
+
+function reviewHeroInstruction(input: HeroReviewInput): string {
+  return [
+    `You are an ecommerce photo reviewer. Image 1 is the original product photo; Image 2 is a generated atmosphere hero based on it.`,
+    `Planned display mode: ${input.displayMode}. Human presence policy: ${input.humanPolicy}.`,
+    `Must be preserved: ${input.preserve.join('; ')}.`,
+    `Allowed to vary: ${input.flexible.join('; ')}.`,
+    `Check only four aspects: (1) product identity, structure, count and connection errors against Image 1 - these are critical; (2) naturalness of the human-product relationship, only when displayMode is human-interaction; (3) believability of scene, scale and lighting; (4) obvious AI look and whether it is suitable as an ecommerce atmosphere hero.`,
+    `Return exactly one JSON object matching the supplied schema. summary and issues must be Simplified Chinese.`,
+    `score is an integer 0..100. passed=true only when score>=70 and there is no severe identity or structure error.`,
+  ].join('\n');
 }
 
 /** Starts from the core Zod contract, then narrows image references to this provider request. */
@@ -177,9 +241,40 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
     });
   }
 
+  async planHeroV2(input: HeroPlanV2Input) {
+    return this.requestStructured({
+      input,
+      operation: 'vision.hero-plan-v2',
+      user: planHeroV2Instruction(input),
+      content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.asset.buffer.toString('base64')}` } }],
+      schema: HeroPlanV2Schema,
+      responseFormat: supportsStrictJsonSchema(this.config.model)
+        ? strictResponseFormat('hero_plan_v2', HeroPlanV2Schema)
+        : { type: 'json_object' },
+    });
+  }
+
+  async reviewHero(input: HeroReviewInput) {
+    return this.requestStructured({
+      input,
+      operation: 'vision.hero-review',
+      user: reviewHeroInstruction(input),
+      content: [
+        { type: 'text', text: 'Image 1: original product photo.' },
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.source.buffer.toString('base64')}` } },
+        { type: 'text', text: 'Image 2: generated atmosphere hero.' },
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.generated.buffer.toString('base64')}` } },
+      ],
+      schema: HeroReviewSchema,
+      responseFormat: supportsStrictJsonSchema(this.config.model)
+        ? strictResponseFormat('hero_review', HeroReviewSchema)
+        : { type: 'json_object' },
+    });
+  }
+
   private async requestStructured<T extends z.ZodType>(options: {
-    input: ProductIntelligenceInput | HeroPlanningInput;
-    operation: 'vision.product-analysis' | 'vision.hero-planning';
+    input: ProductIntelligenceInput | HeroPlanningInput | HeroPlanV2Input | HeroReviewInput;
+    operation: 'vision.product-analysis' | 'vision.hero-planning' | 'vision.hero-plan-v2' | 'vision.hero-review';
     system?: string;
     user: string;
     content: Array<Record<string, unknown>>;
@@ -190,7 +285,11 @@ export class AliyunQwenVisionProvider implements ProductIntelligenceProvider {
     const requestId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
     const started = Date.now();
-    const assets = 'assets' in input ? input.assets : [input.asset];
+    const assets = 'assets' in input
+      ? input.assets
+      : 'source' in input
+        ? [input.source, input.generated]
+        : [input.asset];
     const log = (event: LogDetail) => writeAILog({
       ...event, requestId, operation: options.operation, workspaceId: input.workspaceId,
       profileId: this.config.profileId, driver: this.config.driver, provider: 'aliyun-qwen',

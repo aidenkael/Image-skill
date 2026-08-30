@@ -63,7 +63,7 @@ describe('Workspace 任务素材归属校验', () => {
         options: {
           sourceAssetId: foreignAssetId,
           ratio: '1:1',
-          creativeMode: 'free',
+          creativeMode: 'recommended',
           humanPresence: 'auto',
         },
       }),
@@ -132,7 +132,7 @@ describe('Workspace 任务素材归属校验', () => {
         options: {
           sourceAssetId: referenceAssetId,
           ratio: '1:1',
-          creativeMode: 'free',
+          creativeMode: 'recommended',
           humanPresence: 'auto',
         },
       },
@@ -195,7 +195,7 @@ describe('Hero 运行连续性与重复提交保护', () => {
       options: {
         sourceAssetId: assetId,
         ratio: '1:1',
-        creativeMode: 'free',
+        creativeMode: 'recommended',
         humanPresence: 'auto',
       },
     };

@@ -40,8 +40,9 @@ function heroTask(
       options: {
         sourceAssetId: 'asset-1',
         ratio: '1:1',
-        creativeMode: 'free',
+        creativeMode: 'recommended',
         humanPresence: 'auto',
+        creativeLevel: 'balanced',
       },
     },
     status,
@@ -93,13 +94,30 @@ function collageDoc(name: string, assetId: string | null): TemplateDocument {
 
 describe('Workspace 三任务草稿契约', () => {
   it('允许尚未选择源图的 Optimize 默认草稿并保留恢复字段', () => {
-    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.conceptId).toBeUndefined();
-    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.creativeMode).toBe('free');
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).toMatchObject({
+      creativeMode: 'recommended',
+      humanPresence: 'auto',
+      creativeLevel: 'balanced',
+    });
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('conceptId');
     expect(DEFAULT_WORKSPACE_DRAFT.optimizeOptions).toMatchObject({
       sourceAssetId: '', ratio: 'original', format: 'jpg',
     });
     expect(DEFAULT_WORKSPACE_DRAFT.latestOptimizeTaskId).toBeNull();
     expect(WorkspaceDraftSchema.parse({ ...DEFAULT_WORKSPACE_DRAFT })).toEqual(DEFAULT_WORKSPACE_DRAFT);
+  });
+
+  it('Hero 新字段（创意程度 / 人物偏好 / 推荐模式）能保存进草稿并回读', () => {
+    const draft = WorkspaceDraftSchema.parse({
+      heroOptions: {
+        sourceAssetId: '', ratio: '3:4', creativeMode: 'recommended',
+        creativeIntent: '', humanPresence: 'require', creativeLevel: 'creative',
+      },
+    });
+    expect(draft.heroOptions).toMatchObject({
+      ratio: '3:4', humanPresence: 'require', creativeLevel: 'creative',
+    });
+    expect(WorkspaceDraftSchema.parse(draft)).toEqual(draft);
   });
 
   it('恢复时 Hero 与 Optimize 均拒绝 reference 源，但全局分析选择保留 reference', () => {
@@ -190,11 +208,11 @@ describe('OrderedDraftWriter', () => {
       completed.push(intent);
     }, () => undefined, 10_000);
     writer.schedule(WorkspaceDraftSchema.parse({ heroOptions: {
-      sourceAssetId: '', ratio: '1:1', creativeMode: 'free', creativeIntent: '旧', humanPresence: 'auto',
+      sourceAssetId: '', ratio: '1:1', creativeMode: 'recommended', creativeIntent: '旧', humanPresence: 'auto', creativeLevel: 'balanced',
     } }));
     const first = writer.flush();
     writer.schedule(WorkspaceDraftSchema.parse({ heroOptions: {
-      sourceAssetId: '', ratio: '1:1', creativeMode: 'free', creativeIntent: '新', humanPresence: 'auto',
+      sourceAssetId: '', ratio: '1:1', creativeMode: 'recommended', creativeIntent: '新', humanPresence: 'auto', creativeLevel: 'balanced',
     } }));
     const second = writer.flush();
     await started;

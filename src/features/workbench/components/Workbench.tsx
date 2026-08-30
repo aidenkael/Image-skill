@@ -61,15 +61,7 @@ export function Workbench() {
   }, [workspaceId, wb.hydrated, wb.kind, wb.activeCollageVariant]);
 
   const handleAnalyze = useCallback(async () => {
-    const record = await intelligence.analyze(wb.selectedAssetIds);
-    const firstConcept = record?.plan.heroConcepts[0];
-    if (!firstConcept || wb.heroOptions.creativeMode !== 'concept') return;
-    wb.patchHeroOptions({
-      conceptId: firstConcept.id,
-      ...(wb.heroOptions.sourceAssetId ? {} : {
-        sourceAssetId: firstConcept.recommendedSourceAssetId,
-      }),
-    });
+    await intelligence.analyze(wb.selectedAssetIds);
   }, [intelligence, wb]);
 
   const handleCreateLayout = useCallback(async () => {
