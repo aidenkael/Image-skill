@@ -1,80 +1,72 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { HeroPlanV2 } from '@/core/hero-workflow';
-import type { HeroWorkflowContext, HeroWorkflowInput, HeroWorkflowOutcome } from './contracts';
+import type { HeroBrief } from '@/core/hero-workflow';
+import type { HeroWorkflowInput, HeroWorkflowOutcome } from './contracts';
 import { executeHeroWorkflow } from './executor';
-import { reviewHeroCandidates } from './reviewer';
-import type { ExecutedHeroImage } from './executor';
-import type { ReviewedHeroImage } from './reviewer';
+import {
+  collectRepairFeedback,
+  reviewHeroCandidates,
+  selectUsableInPreferredOrder,
+  type ReviewedHeroImage,
+} from './reviewer';
 
 /**
- * 通用氛围主图工作流编排（执行已策划方案）。
- * 输入为一个已确定的 HeroPlanV2，不再重新策划。
+ * 一键氛围主图工作流编排：
+ * 初始生成 N 张 → 一次批量 QA → 足够则直接返回；
+ * 不足则用 QA 修复反馈补生一次 → 再一次批量 QA → 合并。
  *
- * 数量不变量：成功任务必须恰好交付 request.count 张通过审片的图片。
- * 最多两轮生成（initial + one refill），不无限重试。
+ * 数量不变量：成功任务必须恰好交付 request.count 张；
+ * 最多一次补生，不迭代重试、不无限循环。
  */
-export async function runPlannedHeroWorkflow(
+export async function runHeroWorkflow(
   input: HeroWorkflowInput,
-  plan: HeroPlanV2,
+  brief: HeroBrief,
   outDir: string,
 ): Promise<HeroWorkflowOutcome> {
   const targetCount = input.count;
 
-  // ── 第一轮：生成 N 张并审片 ──
-  const initialImages = await executeHeroWorkflow(input, plan, outDir, {
+  // ── 第一轮：生成 N 张并批量 QA ──
+  const initialImages = await executeHeroWorkflow(input, brief, outDir, {
     count: targetCount,
     startIndex: 0,
-    variant: 'primary',
-    attempt: 1,
   });
-  const initialReviewed = await reviewHeroCandidates(input, plan, initialImages);
-  let allPassed = initialReviewed.filter((item) => item.passed);
-  let allFailed = initialReviewed.filter((item) => !item.passed);
+  const initialBatch = await reviewHeroCandidates(input, brief, initialImages);
+  let usable = selectUsableInPreferredOrder(initialBatch);
+  const allReviewed: ReviewedHeroImage[] = [...initialBatch.reviewed];
 
-  // ── 若通过不足，仅补生成一次 ──
-  if (allPassed.length < targetCount) {
-    const missing = targetCount - allPassed.length;
-    const refillVariant = plan.altPrompt ? 'alt' : 'primary';
-    const refillImages = await executeHeroWorkflow(input, plan, outDir, {
+  // ── 可用不足：仅补生成一次，携带 QA 修复反馈 ──
+  if (usable.length < targetCount) {
+    const missing = targetCount - usable.length;
+    const refillImages = await executeHeroWorkflow(input, brief, outDir, {
       count: missing,
       startIndex: initialImages.length,
-      variant: refillVariant,
-      attempt: 2,
+      repairInstruction: collectRepairFeedback(initialBatch.reviewed),
     });
-    const refillReviewed = await reviewHeroCandidates(input, plan, refillImages);
-    allPassed = [...allPassed, ...refillReviewed.filter((item) => item.passed)];
-    allFailed = [...allFailed, ...refillReviewed.filter((item) => !item.passed)];
+    const refillBatch = await reviewHeroCandidates(input, brief, refillImages);
+    usable = [...usable, ...selectUsableInPreferredOrder(refillBatch)];
+    allReviewed.push(...refillBatch.reviewed);
   }
 
-  // ── 仍不足则清理所有临时文件并失败 ──
-  if (allPassed.length < targetCount) {
-    const allImages = [...initialImages, ...(allPassed.length > 0 ? [] : [])];
-    for (const item of [...initialImages, ...allFailed.flatMap((item) => [item.image])]) {
-      await fs.rm(item.localPath, { force: true }).catch(() => undefined);
-    }
-    for (const item of allPassed) {
+  // ── 仍不足则清理全部临时文件并失败 ──
+  if (usable.length < targetCount) {
+    for (const item of allReviewed) {
       await fs.rm(item.image.localPath, { force: true }).catch(() => undefined);
     }
     throw new Error(
-      `氛围主图审片后仅有 ${allPassed.length}/${targetCount} 张合格，请调整方案后重试`,
+      `氛围主图质检后仅有 ${usable.length}/${targetCount} 张合格，请稍后重试`,
     );
   }
 
-  // ── 按 score 降序取前 N 张 ──
-  allPassed.sort((a, b) => b.review.score - a.review.score);
-  const selected = allPassed.slice(0, targetCount);
-  const notSelected = allPassed.slice(targetCount);
-
-  // ── 清理未通过和未选中的候选 ──
-  for (const item of allFailed) {
-    await fs.rm(item.image.localPath, { force: true }).catch(() => undefined);
-  }
-  for (const item of notSelected) {
-    await fs.rm(item.image.localPath, { force: true }).catch(() => undefined);
+  // ── 按偏好顺序取前 N 张，清理未通过和未选中的候选 ──
+  const selected = usable.slice(0, targetCount);
+  const selectedPaths = new Set(selected.map((item) => item.image.localPath));
+  for (const item of allReviewed) {
+    if (!selectedPaths.has(item.image.localPath)) {
+      await fs.rm(item.image.localPath, { force: true }).catch(() => undefined);
+    }
   }
 
-  // ── 按 score 降序重命名为 result-01.ext ... ──
+  // ── 按偏好顺序重命名为 result-01.ext ... ──
   const candidates: HeroWorkflowOutcome['candidates'] = [];
   let idx = 0;
   for (const item of selected) {
@@ -82,21 +74,19 @@ export async function runPlannedHeroWorkflow(
     const fileName = `result-${String(idx).padStart(2, '0')}.${item.image.extension}`;
     const localPath = path.join(outDir, fileName);
     await fs.rename(item.image.localPath, localPath);
-    candidates.push({ url: item.image.url, localPath, review: item.review });
+    candidates.push({ url: item.image.url, localPath });
   }
 
-  return { plan, candidates };
+  return { brief, candidates };
 }
 
-export type {
-  HeroWorkflowCandidate,
-  HeroWorkflowContext,
-  HeroWorkflowInput,
-  HeroWorkflowOutcome,
-} from './contracts';
-export { buildHeroWorkflowPrompt } from './prompt-builder';
-export { planHeroWorkflow, productUnderstandingForSource } from './planner';
+export type { HeroWorkflowCandidate, HeroWorkflowInput, HeroWorkflowOutcome } from './contracts';
+export { buildHeroGenerationPrompt } from './prompt-builder';
+export { createHeroBrief } from './director';
 export { executeHeroWorkflow } from './executor';
-export { isHeroReviewPassed, reviewHeroCandidates } from './reviewer';
-export { getHeroPlanRecord, createHeroPlanRecord, isHeroPlanRecordFresh } from './plan-store';
-export type { CreateHeroPlanRecordInput } from './plan-store';
+export {
+  collectRepairFeedback,
+  reviewHeroCandidates,
+  selectUsableInPreferredOrder,
+  validateHeroBatchReview,
+} from './reviewer';

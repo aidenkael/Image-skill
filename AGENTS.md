@@ -12,10 +12,10 @@ V1 产品方向以本文为准；仓库内 `legacy/` 目录为历史研究资料
 - 产品：SHEIN 类电商商品视觉工作台（Web 应用）。
 - 最终决定权归用户：任务类型、输入素材、输出数量、是否含文字、视觉方向。
 - V1 可执行任务：`氛围主图(hero)`、`组合卖点图(collage)`、`简单优化(optimize)`；详情页与批量流水线为后续阶段。
-- Product Intelligence 仍由用户显式触发并按 Workspace 持久化。
-- Hero 商品专属方向消费新鲜 Product Intelligence。
-- Hero 自由创作 / 自定义想法必须先获得商品视觉理解：优先复用覆盖当前源图的新鲜 Product Intelligence；没有可复用结果时执行一次轻量 VLM Hero planning。
-- Hero 的轻量 planning 不得自动创建或覆盖 Product Intelligence 记录。
+- Hero 是一键完成的电商摄影工作流：Vision Director → 确定性 Prompt Compiler → Image Provider → 批量 Vision QA → 至多一次基于反馈的补生。
+- 用户不得手动操作 Product Intelligence、策划、QA、结构化输出、Provider 策略或重试步骤；成功的 Hero 任务必须恰好交付请求数量。
+- Hero 保真锁定商品身份/拓扑，同时允许可动部件物理上合理的状态/姿态变化；不得把关节部件冻结为源图的 2D 姿态。
+- Product Intelligence 是有图片依据的商品事实/拼图文案能力，是 Collage 的惰性后台辅助，不是 Hero 前置条件；同一选择不得重复隐藏分析。
 - Collage 只消费有图片依据的文案建议且服务端仍为确定性执行。
 - `reference` 素材仅可用于视觉方向参考；不得作为 Hero / Collage / Optimize 的商品内容源，也不得作为任何商品事实、标题或卖点证据。
 - Product Intelligence 产生的 Collage 标题与卖点必须绑定当前商品图片证据；旧的无证据分析记录不得兼容冒充新结果，必须重新分析。

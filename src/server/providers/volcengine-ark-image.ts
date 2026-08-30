@@ -1,10 +1,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { writeAILog } from '@/server/logging/ai-log';
+import { writeAIRequestLog } from '@/server/logging/ai-log';
 import type { ResolvedImageConfig } from '@/server/settings/ai';
 import type { GeneratedImage, ImageGenerationInput, ImageProvider } from './image-provider';
 import { ProviderConfigError, ProviderRequestError, providerFetchError, providerHttpError } from './provider-errors';
+
+/** 火山方舟图片协议只支持单张循环；每张一次 HTTP 请求 = 一个独立日志文件。 */
 
 const MIME_BY_EXT: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
@@ -51,56 +53,90 @@ export class VolcengineArkImageProvider implements ImageProvider {
     const size = resolveSize(this.config, input.ratio);
     const results: GeneratedImage[] = [];
     for (let index = 0; index < input.count; index += 1) {
-      const requestId = crypto.randomUUID();
-      const started = Date.now();
-      const log = (event: Omit<Parameters<typeof writeAILog>[0], 'requestId' | 'operation' | 'profileId' | 'driver' | 'provider' | 'model' | 'endpoint' | 'durationMs' | 'apiKey' | 'count' | 'ratio'>) => writeAILog({
-        ...event, requestId, operation: 'image.generation', profileId: this.config.profileId,
-        driver: this.config.driver, provider: this.config.driver, model: this.config.model,
-        endpoint: this.config.endpoint, apiKey: this.config.apiKey, durationMs: Date.now() - started,
-        count: 1, ratio: input.ratio,
-      });
-      const bodyPayload: Record<string, unknown> = {
-        model: this.config.model,
-        prompt: input.prompt,
-        image: dataUri,
-        sequential_image_generation: 'disabled',
-        stream: false,
-        response_format: 'url',
-        watermark: false,
-      };
-      if (size) bodyPayload.size = size;
-      let response: Response;
-      try {
-        response = await fetch(this.config.endpoint, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${this.config.apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(bodyPayload),
-          signal: AbortSignal.timeout(180_000),
-        });
-      } catch (error) {
-        await log({ status: 'failed', failureStage: 'fetch', errorName: error instanceof Error ? error.name : undefined, errorMessage: error instanceof Error ? error.message : 'Unknown error' });
-        throw providerFetchError(error);
-      }
-      if (!response.ok) {
-        const responseSnippet = await response.text();
-        await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet });
-        console.error(`[ai] image.generation failed requestId=${requestId.slice(0, 8)}`);
-        throw providerHttpError(response.status);
-      }
-      let body: unknown;
-      try { body = await response.json(); } catch {
-        await log({ status: 'failed', failureStage: 'response-json', httpStatus: response.status });
-        throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
-      }
-      const urls = (body as { data?: Array<{ url?: unknown }> }).data
-        ?.flatMap((item) => typeof item.url === 'string' && item.url ? [{ url: item.url }] : []) ?? [];
-      if (urls.length !== 1) {
-        await log({ status: 'failed', failureStage: 'content-extract', httpStatus: response.status });
-        throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
-      }
-      results.push(urls[0]);
-      await log({ status: 'succeeded', httpStatus: response.status });
+      results.push(await this.requestSingle(input, dataUri, size));
     }
     return results;
+  }
+
+  private async requestSingle(
+    input: ImageGenerationInput,
+    dataUri: string,
+    size: string | undefined,
+  ): Promise<GeneratedImage> {
+    const bodyPayload: Record<string, unknown> = {
+      model: this.config.model,
+      prompt: input.prompt,
+      image: dataUri,
+      sequential_image_generation: 'disabled',
+      stream: false,
+      response_format: 'url',
+      watermark: false,
+    };
+    if (size) bodyPayload.size = size;
+
+    const requestId = crypto.randomUUID();
+    const started = Date.now();
+    const log = (event: {
+      status: 'succeeded' | 'failed';
+      httpStatus?: number;
+      failureStage?: string;
+      errorName?: string;
+      errorMessage?: string;
+      responseBody?: unknown;
+    }) => writeAIRequestLog({
+      timestamp: new Date().toISOString(),
+      requestId,
+      operation: 'image-generation',
+      profileId: this.config.profileId,
+      driver: this.config.driver,
+      model: this.config.model,
+      endpoint: this.config.endpoint,
+      durationMs: Date.now() - started,
+      status: event.status,
+      ...(event.httpStatus !== undefined ? { httpStatus: event.httpStatus } : {}),
+      ...(event.failureStage ? { failureStage: event.failureStage } : {}),
+      ...(event.errorName ? { errorName: event.errorName } : {}),
+      ...(event.errorMessage !== undefined ? { errorMessage: event.errorMessage } : {}),
+      requestBody: bodyPayload,
+      ...(event.responseBody !== undefined ? { responseBody: event.responseBody } : {}),
+      redact: [this.config.apiKey],
+      extra: { batchMode: 'single', count: 1, ratio: input.ratio },
+    });
+
+    let response: Response;
+    try {
+      response = await fetch(this.config.endpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.config.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload),
+        signal: AbortSignal.timeout(180_000),
+      });
+    } catch (error) {
+      await log({ status: 'failed', failureStage: 'fetch',
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error' });
+      throw providerFetchError(error);
+    }
+
+    const responseRaw = await response.text();
+    if (!response.ok) {
+      await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseBody: responseRaw });
+      console.error(`[ai] image-generation failed requestId=${requestId.slice(0, 8)}`);
+      throw providerHttpError(response.status);
+    }
+
+    let body: unknown;
+    try { body = JSON.parse(responseRaw); } catch {
+      await log({ status: 'failed', failureStage: 'response-json', httpStatus: response.status, responseBody: responseRaw });
+      throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
+    }
+    const urls = (body as { data?: Array<{ url?: unknown }> }).data
+      ?.flatMap((item) => typeof item.url === 'string' && item.url ? [{ url: item.url }] : []) ?? [];
+    if (urls.length !== 1) {
+      await log({ status: 'failed', failureStage: 'content-extract', httpStatus: response.status, responseBody: body });
+      throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
+    }
+    await log({ status: 'succeeded', httpStatus: response.status, responseBody: body });
+    return urls[0];
   }
 }

@@ -1,18 +1,15 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { HeroPlanV2 } from '@/core/hero-workflow';
-import { writeAILog } from '@/server/logging/ai-log';
+import type { HeroBrief } from '@/core/hero-workflow';
 import { createActiveImageProvider } from '@/server/providers/factory';
 import { providerFetchError, providerHttpError } from '@/server/providers/provider-errors';
 import { readImageMeta } from '@/server/image/sharp';
 import type { HeroWorkflowInput } from './contracts';
-import { buildHeroWorkflowPrompt } from './prompt-builder';
+import { buildHeroGenerationPrompt } from './prompt-builder';
 
 /**
- * Phase C：执行。
- * 两条通用分支（scene-staging / human-interaction）都走现有 ImageProvider，
- * 差异只体现在由 HeroPlanV2 组装的最终 Prompt 上；不按商品类别分支。
+ * 执行：Image Provider 只负责生成。
+ * 最终 prompt 由确定性编译器从 HeroBrief 组装；HTTP 级日志由 Provider adapter 写入。
  */
 
 export interface ExecutedHeroImage {
@@ -48,67 +45,44 @@ async function saveGeneratedImage(buf: Buffer, outDir: string, name: string): Pr
 export interface ExecuteHeroWorkflowOptions {
   count: number;
   startIndex: number;
-  variant?: 'primary' | 'alt';
-  attempt?: number;
+  /** QA 反馈的一次性修复指令（仅补生轮携带） */
+  repairInstruction?: string;
 }
 
 export async function executeHeroWorkflow(
   input: HeroWorkflowInput,
-  plan: HeroPlanV2,
+  brief: HeroBrief,
   outDir: string,
-  options: ExecuteHeroWorkflowOptions = { count: input.count, startIndex: 0 },
+  options: ExecuteHeroWorkflowOptions,
 ): Promise<ExecutedHeroImage[]> {
   const provider = await createActiveImageProvider();
-  const requestId = crypto.randomUUID();
-  const started = Date.now();
-  const attempt = options.attempt ?? 1;
-  const promptVariant = options.variant ?? 'primary';
-  const log = (extra: Record<string, unknown>) => writeAILog({
-    requestId,
-    operation: 'hero.generate',
-    workspaceId: input.workspaceId,
-    status: 'succeeded',
-    durationMs: Date.now() - started,
-    displayMode: plan.displayMode,
-    humanPolicy: input.humanPolicy,
-    creativeLevel: input.creativeLevel,
+  const prompt = buildHeroGenerationPrompt(
+    brief,
+    { humanPolicy: input.humanPolicy, creativeIntent: input.creativeIntent },
+    options.repairInstruction,
+  );
+
+  const generated = await provider.generate({
+    imagePath: input.sourceImagePath,
+    prompt,
     ratio: input.ratio,
     count: options.count,
-    attempt,
-    ...extra,
   });
-
-  try {
-    const generated = await provider.generate({
-      imagePath: input.sourceImagePath,
-      prompt: buildHeroWorkflowPrompt(plan, promptVariant),
-      ratio: input.ratio,
-      count: options.count,
-    });
-    if (generated.length !== options.count) {
-      throw new Error(`模型返回结果数量不完整：要求 ${options.count} 张，实际 ${generated.length} 张`);
-    }
-
-    const images: ExecutedHeroImage[] = [];
-    let idx = 0;
-    for (const item of generated) {
-      if (!item.url) continue;
-      const buf = await downloadImage(item.url);
-      const saved = await saveGeneratedImage(buf, outDir, `candidate-${String(options.startIndex + idx + 1).padStart(2, '0')}`);
-      images.push({ url: item.url, buffer: buf, ...saved });
-      idx += 1;
-    }
-    if (images.length !== options.count) {
-      throw new Error(`模型返回结果数量不完整：要求 ${options.count} 张，实际 ${images.length} 张`);
-    }
-    await log({ status: 'succeeded' });
-    return images;
-  } catch (error) {
-    await log({
-      status: 'failed',
-      errorName: error instanceof Error ? error.name : undefined,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
+  if (generated.length !== options.count) {
+    throw new Error(`模型返回结果数量不完整：要求 ${options.count} 张，实际 ${generated.length} 张`);
   }
+
+  const images: ExecutedHeroImage[] = [];
+  let idx = 0;
+  for (const item of generated) {
+    if (!item.url) continue;
+    const buf = await downloadImage(item.url);
+    const saved = await saveGeneratedImage(buf, outDir, `candidate-${String(options.startIndex + idx + 1).padStart(2, '0')}`);
+    images.push({ url: item.url, buffer: buf, ...saved });
+    idx += 1;
+  }
+  if (images.length !== options.count) {
+    throw new Error(`模型返回结果数量不完整：要求 ${options.count} 张，实际 ${images.length} 张`);
+  }
+  return images;
 }

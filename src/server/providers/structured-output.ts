@@ -19,6 +19,18 @@ export function sanitizeJsonSchema(schema: unknown): JsonSchema {
       Object.entries(input.properties as JsonSchema).map(([key, value]) => [key, sanitizeJsonSchema(value)]),
     );
   }
+  // nullable 字段：Zod 4 输出 anyOf: [实际类型, {type:'null'}]，
+  // 归一为 JSON Schema 的 type 数组（如 ["string", "null"]），保留字段定义。
+  if (Array.isArray(input.anyOf)) {
+    const branches = (input.anyOf as unknown[]).filter((b): b is JsonSchema => Boolean(b) && typeof b === 'object');
+    const nonNull = branches.filter((branch) => branch.type !== 'null');
+    const hasNull = branches.length > nonNull.length;
+    if (hasNull && nonNull.length === 1) {
+      const inner = sanitizeJsonSchema(nonNull[0]);
+      if (typeof inner.type === 'string') inner.type = [inner.type, 'null'];
+      return inner;
+    }
+  }
   return output;
 }
 

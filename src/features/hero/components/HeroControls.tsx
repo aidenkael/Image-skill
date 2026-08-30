@@ -1,9 +1,14 @@
 'use client';
 
 import type { AssetRef } from '@/core/assets';
-import type { HeroPlanRecord } from '@/core/hero-workflow';
 import { assetUrl } from '@/core/results';
 import type { HeroTaskOptions } from '@/core/tasks';
+
+/**
+ * 一键氛围主图控制面板：
+ * 源图 + 可选创作要求 + 人物偏好 + 数量 + 比例 + 一个主操作。
+ * Director、Prompt 编译、生成、批量 QA 与补生全部由任务内部完成。
+ */
 
 interface HeroControlsProps {
   workspaceId: string;
@@ -13,18 +18,10 @@ interface HeroControlsProps {
   busy: boolean;
   visionConfigured: boolean;
   imageConfigured: boolean;
-  heroPlan: HeroPlanRecord | null;
-  planLoading: boolean;
   onChange(patch: Partial<HeroTaskOptions>): void;
   onCountChange(n: number): void;
-  onGeneratePlan(): void;
   onGenerate(): void;
 }
-
-const DISPLAY_MODE_LABEL: Record<string, string> = {
-  'scene-staging': '静物陈列',
-  'human-interaction': '人物互动',
-};
 
 export function HeroControls({
   workspaceId,
@@ -34,29 +31,20 @@ export function HeroControls({
   busy,
   visionConfigured,
   imageConfigured,
-  heroPlan,
-  planLoading,
   onChange,
   onCountChange,
-  onGeneratePlan,
   onGenerate,
 }: HeroControlsProps) {
   const sourceAsset = assets.find((asset) => asset.id === options.sourceAssetId);
-  const hasPlan = heroPlan !== null && heroPlan.id === options.planId;
-  const generateBlocker = busy
+  const blocker = busy
     ? '当前商品的氛围主图正在生成，请等待完成。'
     : !sourceAsset
       ? '请明确选择一张非参考源商品图。'
-      : !imageConfigured
-        ? '请先在 AI 设置中选择氛围主图生成模型'
-        : null;
-  const planBlocker = !sourceAsset
-    ? '请先选择源商品图'
-    : options.creativeMode === 'custom' && !options.creativeIntent?.trim()
-      ? '请先填写创作想法'
       : !visionConfigured
         ? '请先在 AI 设置中选择商品分析/视觉模型'
-        : null;
+        : !imageConfigured
+          ? '请先在 AI 设置中选择氛围主图生成模型'
+          : null;
 
   return (
     <div className="controls-body">
@@ -82,23 +70,15 @@ export function HeroControls({
       </div>
 
       <div className="field">
-        <label className="field-label">创作方式</label>
-        <div className="seg">
-          <button type="button" className={`seg-btn${options.creativeMode === 'recommended' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'recommended' })}>AI 推荐方案</button>
-          <button type="button" className={`seg-btn${options.creativeMode === 'custom' ? ' is-active' : ''}`} onClick={() => onChange({ creativeMode: 'custom' })}>自定义想法</button>
-        </div>
-        {options.creativeMode === 'recommended' ? (
-          <div className="hint">AI 像商业摄影师一样为商品策划氛围主图：锁定商品身份，自由发挥展示方式。</div>
-        ) : null}
-        {options.creativeMode === 'custom' ? (
-          <textarea
-            className="input textarea"
-            placeholder="写下你希望画面传达的感觉、故事或任何创意要求"
-            value={options.creativeIntent ?? ''}
-            maxLength={500}
-            onChange={(event) => onChange({ creativeIntent: event.target.value })}
-          />
-        ) : null}
+        <label className="field-label" htmlFor="hero-creative-intent">可选创作要求</label>
+        <textarea
+          id="hero-creative-intent"
+          className="input textarea"
+          placeholder="可不填。需要特定场景、氛围或展示方式时直接写一句话。"
+          value={options.creativeIntent ?? ''}
+          maxLength={500}
+          onChange={(event) => onChange({ creativeIntent: event.target.value })}
+        />
       </div>
 
       <div className="field">
@@ -117,27 +97,7 @@ export function HeroControls({
             ? '需要人物：画面通过手持/佩戴/背负等自然互动展示商品。'
             : options.humanPresence === 'avoid'
               ? '不要人物：画面不出现人物、手部或人体局部。'
-              : '自动：由 AI 判断人物参与是否有助于表现商品。'}
-        </div>
-      </div>
-
-      <div className="field">
-        <label className="field-label">创意程度</label>
-        <div className="seg">
-          {([
-            ['conservative', '保守'],
-            ['balanced', '平衡'],
-            ['creative', '创意'],
-          ] as const).map(([value, label]) => (
-            <button key={value} type="button" className={`seg-btn${options.creativeLevel === value ? ' is-active' : ''}`} onClick={() => onChange({ creativeLevel: value })}>{label}</button>
-          ))}
-        </div>
-        <div className="hint">
-          {options.creativeLevel === 'conservative'
-            ? '保守：强调结构保真，只做轻度场景联想。'
-            : options.creativeLevel === 'creative'
-              ? '创意：允许更大胆的场景与表现方式，但商品身份不变。'
-              : '平衡：默认的保真与氛围兼顾。'}
+              : '自动：由 AI 按买家理解商品的价值判断展示方式。'}
         </div>
       </div>
 
@@ -147,40 +107,13 @@ export function HeroControls({
       <div className="controls-actions">
         <button
           type="button"
-          className="btn"
-          disabled={Boolean(planBlocker) || planLoading}
-          onClick={onGeneratePlan}
-        >
-          {planLoading ? '策划方案中…' : hasPlan ? '更新 AI 方案' : '生成/更新 AI 方案'}
-        </button>
-        {planBlocker ? <div className="hint blocker-hint">{planBlocker}</div> : null}
-      </div>
-
-      {hasPlan && heroPlan ? (
-        <div className="direction-card is-readonly">
-          <strong>当前执行方案：{heroPlan.plan.title}</strong>
-          <span>展示方式：{DISPLAY_MODE_LABEL[heroPlan.plan.displayMode] ?? heroPlan.plan.displayMode}</span>
-          <span>核心卖点：{heroPlan.plan.coreSellingAngle}</span>
-          <span>场景：{heroPlan.plan.scene}</span>
-          <span>构图：{heroPlan.plan.composition}</span>
-        </div>
-      ) : heroPlan ? (
-        <div className="hint">当前方案已失效（参数已变化），请重新生成方案。</div>
-      ) : (
-        <div className="hint">请先点击「生成/更新 AI 方案」获取策划方案。</div>
-      )}
-
-      <div className="controls-actions">
-        <button
-          type="button"
           className="btn btn-primary"
-          disabled={Boolean(generateBlocker) || !hasPlan}
+          disabled={Boolean(blocker)}
           onClick={onGenerate}
         >
-          {busy ? '生成中…' : '按此方案生成氛围主图'}
+          {busy ? '生成中…' : '生成氛围主图'}
         </button>
-        {generateBlocker ? <div className="hint blocker-hint">{generateBlocker}</div> : null}
-        {!hasPlan && !generateBlocker ? <div className="hint blocker-hint">请先生成 AI 方案</div> : null}
+        {blocker ? <div className="hint blocker-hint">{blocker}</div> : null}
       </div>
     </div>
   );

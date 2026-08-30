@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { AssetRef } from '@/core/assets';
-import type { HeroTaskOptions, TaskRecord } from '@/core/tasks';
+import type { TaskRecord } from '@/core/tasks';
 import type { TemplateDocument } from '@/core/templates';
 import { DEFAULT_WORKSPACE_DRAFT, WorkspaceDraftSchema } from '@/core/workspaces';
 import {
-  heroPlanInputChanged,
   heroRunStatePatch,
   removeAssetFromCollageVariants,
   replaceActiveCollageVariantInList,
@@ -12,7 +11,6 @@ import {
   resolveActiveCollageVariant,
   restoreSelectedAssetIds,
   sanitizeCollageVariants,
-  shouldInvalidateHeroPlanForRoleChange,
   sourceIdAfterRoleChange,
   OrderedDraftWriter,
 } from './workbench';
@@ -42,10 +40,7 @@ function heroTask(
       options: {
         sourceAssetId: 'asset-1',
         ratio: '1:1',
-        creativeMode: 'recommended',
         humanPresence: 'auto',
-        creativeLevel: 'balanced',
-        planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
       },
     },
     status,
@@ -98,11 +93,11 @@ function collageDoc(name: string, assetId: string | null): TemplateDocument {
 describe('Workspace 三任务草稿契约', () => {
   it('允许尚未选择源图的 Optimize 默认草稿并保留恢复字段', () => {
     expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).toMatchObject({
-      creativeMode: 'recommended',
       humanPresence: 'auto',
-      creativeLevel: 'balanced',
+      creativeIntent: '',
     });
     expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('conceptId');
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('planId');
     expect(DEFAULT_WORKSPACE_DRAFT.optimizeOptions).toMatchObject({
       sourceAssetId: '', ratio: 'original', format: 'jpg',
     });
@@ -110,15 +105,15 @@ describe('Workspace 三任务草稿契约', () => {
     expect(WorkspaceDraftSchema.parse({ ...DEFAULT_WORKSPACE_DRAFT })).toEqual(DEFAULT_WORKSPACE_DRAFT);
   });
 
-  it('Hero 新字段（创意程度 / 人物偏好 / 推荐模式）能保存进草稿并回读', () => {
+  it('Hero 简化字段（人物偏好 / 创作要求）能保存进草稿并回读', () => {
     const draft = WorkspaceDraftSchema.parse({
       heroOptions: {
-        sourceAssetId: '', ratio: '3:4', creativeMode: 'recommended',
-        creativeIntent: '', humanPresence: 'require', creativeLevel: 'creative',
+        sourceAssetId: '', ratio: '3:4',
+        creativeIntent: '雨夜归家', humanPresence: 'require',
       },
     });
     expect(draft.heroOptions).toMatchObject({
-      ratio: '3:4', humanPresence: 'require', creativeLevel: 'creative',
+      ratio: '3:4', humanPresence: 'require', creativeIntent: '雨夜归家',
     });
     expect(WorkspaceDraftSchema.parse(draft)).toEqual(draft);
   });
@@ -211,11 +206,11 @@ describe('OrderedDraftWriter', () => {
       completed.push(intent);
     }, () => undefined, 10_000);
     writer.schedule(WorkspaceDraftSchema.parse({ heroOptions: {
-      sourceAssetId: '', ratio: '1:1', creativeMode: 'recommended', creativeIntent: '旧', humanPresence: 'auto', creativeLevel: 'balanced',
+      sourceAssetId: '', ratio: '1:1', creativeIntent: '旧', humanPresence: 'auto',
     } }));
     const first = writer.flush();
     writer.schedule(WorkspaceDraftSchema.parse({ heroOptions: {
-      sourceAssetId: '', ratio: '1:1', creativeMode: 'recommended', creativeIntent: '新', humanPresence: 'auto', creativeLevel: 'balanced',
+      sourceAssetId: '', ratio: '1:1', creativeIntent: '新', humanPresence: 'auto',
     } }));
     const second = writer.flush();
     await started;
@@ -273,76 +268,20 @@ describe('heroRunStatePatch：最新 Hero 任务状态一致性', () => {
   });
 });
 
-describe('heroPlanInputChanged：Hero 策划输入变化检测', () => {
-  const baseOptions: HeroTaskOptions = {
-    sourceAssetId: 'asset-1',
-    ratio: '1:1',
-    creativeMode: 'recommended',
-    humanPresence: 'auto',
-    creativeLevel: 'balanced',
-  };
-
-  it('真正修改策划输入 => 返回 true（方案失效）', () => {
-    expect(heroPlanInputChanged(baseOptions, { ratio: '3:4' })).toBe(true);
-    expect(heroPlanInputChanged(baseOptions, { sourceAssetId: 'asset-2' })).toBe(true);
-    expect(heroPlanInputChanged(baseOptions, { creativeMode: 'custom' })).toBe(true);
-    expect(heroPlanInputChanged(baseOptions, { humanPresence: 'require' })).toBe(true);
-    expect(heroPlanInputChanged(baseOptions, { creativeLevel: 'creative' })).toBe(true);
-    expect(heroPlanInputChanged(baseOptions, { creativeIntent: '新想法' })).toBe(true);
-  });
-
-  it('相同值重复 patch => 返回 false（方案不失效）', () => {
-    expect(heroPlanInputChanged(baseOptions, { ratio: '1:1' })).toBe(false);
-    expect(heroPlanInputChanged(baseOptions, { sourceAssetId: 'asset-1' })).toBe(false);
-    expect(heroPlanInputChanged(baseOptions, { creativeMode: 'recommended' })).toBe(false);
-    expect(heroPlanInputChanged(baseOptions, { humanPresence: 'auto' })).toBe(false);
-    expect(heroPlanInputChanged(baseOptions, { creativeLevel: 'balanced' })).toBe(false);
-  });
-
-  it('仅修改 planId => 不触发失效（planId 不是策划输入）', () => {
-    expect(heroPlanInputChanged(baseOptions, { planId: 'some-uuid' })).toBe(false);
-  });
-
-  it('混合 patch：策划输入变化 + planId => 仍然失效', () => {
-    expect(heroPlanInputChanged(baseOptions, { ratio: '3:4', planId: 'some-uuid' })).toBe(true);
-  });
-
-  it('非 Hero source 素材的 patch（不包含策划输入键） => 不失效', () => {
-    expect(heroPlanInputChanged(baseOptions, {})).toBe(false);
-  });
-});
-
-describe('shouldInvalidateHeroPlanForRoleChange：源素材角色变更失效判定', () => {
-  const ASSET_A = 'asset-A';
-  const ASSET_B = 'asset-B';
-
-  it('Hero 源素材角色变更 front -> detail => 失效（true）', () => {
-    expect(
-      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_A, 'front', 'detail'),
-    ).toBe(true);
-  });
-
-  it('Hero 源素材角色变更 detail -> reference => 失效（true）', () => {
-    expect(
-      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_A, 'detail', 'reference'),
-    ).toBe(true);
-  });
-
-  it('非 Hero 源素材角色变更 front -> detail => 不失效（false）', () => {
-    expect(
-      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_B, 'front', 'detail'),
-    ).toBe(false);
-  });
-
-  it('非 Hero 源素材角色变更 detail -> reference => 不失效（false）', () => {
-    expect(
-      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_B, 'detail', 'reference'),
-    ).toBe(false);
-  });
-
-  it('Hero 源素材角色未变 front -> front => 不失效（false）', () => {
-    expect(
-      shouldInvalidateHeroPlanForRoleChange(ASSET_A, ASSET_A, 'front', 'front'),
-    ).toBe(false);
+describe('一键 Hero：无方案状态机', () => {
+  it('草稿与任务选项均不包含 planId/creativeMode/creativeLevel', () => {
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('planId');
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('creativeMode');
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('creativeLevel');
+    const legacy = WorkspaceDraftSchema.parse({
+      heroOptions: {
+        sourceAssetId: SOURCE_ID, ratio: '1:1', humanPresence: 'auto',
+        planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        creativeMode: 'custom', creativeLevel: 'creative',
+      },
+    });
+    expect(legacy.heroOptions).not.toHaveProperty('planId');
+    expect(legacy.heroOptions).not.toHaveProperty('creativeMode');
+    expect(legacy.heroOptions).not.toHaveProperty('creativeLevel');
   });
 });

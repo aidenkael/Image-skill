@@ -24,16 +24,17 @@ describe('商品工作区契约', () => {
     expect(WorkspaceDraftSchema.parse({})).toEqual(DEFAULT_WORKSPACE_DRAFT);
     expect(DEFAULT_WORKSPACE_DRAFT.heroOptions.sourceAssetId).toBe('');
     expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).toMatchObject({
-      creativeMode: 'recommended',
       creativeIntent: '',
       humanPresence: 'auto',
-      creativeLevel: 'balanced',
     });
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('planId');
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('creativeMode');
+    expect(DEFAULT_WORKSPACE_DRAFT.heroOptions).not.toHaveProperty('creativeLevel');
     expect(DEFAULT_WORKSPACE_DRAFT.collageVariants).toEqual([]);
     expect(DEFAULT_WORKSPACE_DRAFT.latestHeroTaskId).toBeNull();
   });
 
-  it('旧 Hero 草稿字段被丢弃并补入新默认值，历史枚举值被归一化', () => {
+  it('旧 Hero 草稿字段被丢弃并补入新默认值，历史枚举值被迁移，旧创作要求保留', () => {
     const draft = WorkspaceDraftSchema.parse({
       heroOptions: {
         sourceAssetId: '',
@@ -43,17 +44,17 @@ describe('商品工作区契约', () => {
         directionId: 'old',
         scenePrompt: '旧场景',
         creativeMode: 'free',
+        creativeLevel: 'creative',
+        planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
         humanPresence: 'involved',
+        creativeIntent: '雨夜归家',
       },
     });
     expect(draft.heroOptions).toEqual({
       sourceAssetId: '',
       ratio: '1:1',
-      creativeMode: 'recommended',
-      creativeIntent: '',
+      creativeIntent: '雨夜归家',
       humanPresence: 'require',
-      creativeLevel: 'balanced',
-      planId: null,
     });
   });
 

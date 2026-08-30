@@ -44,10 +44,6 @@ export const ProductIntelligencePayloadSchema = z.object({
   plan: VisualPlanSchema,
 });
 
-export const HeroRuntimePlanSchema = z.object({
-  prompt: z.string().trim().min(1).max(900),
-});
-
 export const IntelligenceAssetSnapshotSchema = z.object({
   id: z.string().uuid(),
   role: z.enum(ASSET_ROLES),
@@ -62,7 +58,6 @@ export const ProductIntelligenceRecordSchema = ProductIntelligencePayloadSchema.
 });
 
 export type ProductIntelligencePayload = z.infer<typeof ProductIntelligencePayloadSchema>;
-export type HeroRuntimePlan = z.infer<typeof HeroRuntimePlanSchema>;
 export type ProductIntelligenceRecord = z.infer<typeof ProductIntelligenceRecordSchema>;
 
 export const IntelligenceRunStatusSchema = z.enum(['running', 'succeeded', 'failed']);

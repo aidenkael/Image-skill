@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { OpenAICompatibleVisionProvider, buildProductIntelligenceJsonSchema } from './openai-compatible-vision';
+import type { HeroBatchReview, HeroBrief } from '@/core/hero-workflow';
 import type { ResolvedVisionConfig } from '@/server/settings/ai';
 
 let root = '';
@@ -18,37 +19,58 @@ const payload = {
   plan: { collage: { titleOptions: [], sellingPoints: [] } },
 };
 const analysisInput = () => ({ workspaceId, workspaceName: '商品', assets: [{ assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('image') }] });
-const heroInput = () => ({ workspaceId, workspaceName: '商品', asset: { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('selected-image') } });
 
-const planV2Payload = {
+const briefPayload: HeroBrief = {
   title: '晨光桌面',
-  displayMode: 'scene-staging',
-  humanPolicy: 'auto',
-  coreSellingAngle: '日常陪伴感',
-  preserve: ['白色杯身', '单件', '陶瓷质感'],
-  flexible: ['光线氛围'],
-  scene: '清晨木桌',
-  composition: '居中微俯',
-  lighting: '柔和自然光',
-  riskChecks: ['杯柄结构', '数量变化'],
-  prompt: 'A warm morning tabletop hero.',
+  productIdentity: {
+    summary: '白色陶瓷马克杯',
+    fixedTraits: ['白色杯身', '单件', '陶瓷质感'],
+    movableParts: [],
+  },
+  presentation: {
+    mode: 'scene-staging',
+    reason: '桌面场景传达日常使用感',
+    interaction: null,
+    scene: '清晨木桌',
+    camera: '居中微俯 50mm',
+    lighting: '柔和自然窗光',
+    depthOfField: '轻浅景深',
+    scaleCue: null,
+  },
+  forbiddenChanges: ['杯柄数量变化', '杯身图案改变', '材质变成金属'],
 };
-const reviewPayload = { passed: true, score: 82, issues: [], summary: '结构一致' };
-const planV2Input = () => ({
-  ...heroInput(),
-  humanPolicy: 'avoid' as const,
-  creativeLevel: 'creative' as const,
-  creativeIntent: '雨夜归家',
-  productUnderstanding: '白色杯身',
-});
-const reviewInput = () => ({
+const humanBriefPayload: HeroBrief = {
+  ...briefPayload,
+  presentation: { ...briefPayload.presentation, mode: 'human-interaction', interaction: '模特自然手持' },
+};
+
+const directorInput = (humanPolicy: 'auto' | 'avoid' | 'require' = 'auto') => ({
   workspaceId,
+  taskId: 'task-1',
+  workspaceName: '商品',
+  asset: { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('selected-image') },
+  humanPolicy,
+  creativeIntent: '雨夜归家',
+});
+
+const batchReviewPayload: HeroBatchReview = {
+  assessments: [
+    { candidateIndex: 0, hardFailures: [], softIssues: ['excessive_bokeh'], repairInstruction: null },
+    { candidateIndex: 1, hardFailures: ['topology_broken'], softIssues: [], repairInstruction: '保持链条为一条连续链' },
+  ],
+  preferredOrder: [0, 1],
+};
+
+const batchReviewInput = () => ({
+  workspaceId,
+  taskId: 'task-1',
   source: { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('source') },
-  generated: { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('generated') },
-  displayMode: 'human-interaction' as const,
-  humanPolicy: 'require' as const,
-  preserve: ['白色杯身'],
-  flexible: ['光线氛围'],
+  generated: [
+    { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('generated-1') },
+    { assetId, role: 'front' as const, mimeType: 'image/jpeg' as const, buffer: Buffer.from('generated-2') },
+  ],
+  brief: briefPayload,
+  humanPolicy: 'auto' as const,
 });
 
 beforeAll(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'vision-provider-')); process.env.RUNTIME_DIR = path.join(root, '.runtime'); });
@@ -64,9 +86,16 @@ function responseBody() {
   return () => captured;
 }
 
+/** 读取当天最新一个请求级日志文件（文件名按时间排序） */
 async function lastLog(): Promise<Record<string, unknown>> {
-  const file = path.join(root, '.runtime', 'logs', `ai-${new Date().toISOString().slice(0, 10)}.jsonl`);
-  return JSON.parse((await fs.readFile(file, 'utf8')).trim().split('\n').at(-1)!);
+  const dir = path.join(root, '.runtime', 'logs', 'ai', new Date().toISOString().slice(0, 10));
+  const files = (await fs.readdir(dir)).sort();
+  return JSON.parse(await fs.readFile(path.join(dir, files.at(-1)!), 'utf8'));
+}
+
+async function logFiles(): Promise<string[]> {
+  const dir = path.join(root, '.runtime', 'logs', 'ai', new Date().toISOString().slice(0, 10));
+  return (await fs.readdir(dir).catch(() => [])).sort();
 }
 
 describe('OpenAI 兼容识图 Provider（模型无关）', () => {
@@ -93,18 +122,12 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
     expect(getBody().response_format).toEqual({ type: 'json_object' });
   });
 
-  it('future-vision-model-2099 + json-schema 正常工作（model 是 opaque string）', async () => {
+  it('future-vision-model-2099 正常工作（model 是 opaque string，无模型名分支）', async () => {
     const futureConfig = { ...jsonSchemaConfig, model: 'future-vision-model-2099' };
     const getBody = responseBody();
     await expect(new OpenAICompatibleVisionProvider(futureConfig).analyze(analysisInput())).resolves.toEqual(payload);
     expect(getBody().model).toBe('future-vision-model-2099');
     expect((getBody().response_format as { type: string }).type).toBe('json_schema');
-  });
-
-  it('同一 model 在 json-object 时走 json-object', async () => {
-    const getBody = responseBody();
-    await new OpenAICompatibleVisionProvider(jsonObjectConfig).analyze(analysisInput());
-    expect(getBody().response_format).toEqual({ type: 'json_object' });
   });
 
   it('json-object 模式 system prompt 包含真实 JSON Schema', async () => {
@@ -136,63 +159,17 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
     expect(callCount).toBe(2);
   });
 
-  it('auto 模式：json-schema→json-object 降级后 system prompt 包含真实 JSON Schema', async () => {
+  it('auto 模式：200 schema-invalid 最多 1 次 retry', async () => {
     let callCount = 0;
-    let secondBody: Record<string, unknown> = {};
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
       callCount += 1;
-      const body = JSON.parse(String(init.body));
       if (callCount === 1) {
-        return Response.json({ error: { message: 'json_schema not supported' } }, { status: 400 });
-      }
-      secondBody = body;
-      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
-    }));
-    await new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput());
-    const systemMsg = (secondBody.messages as Array<{ role: string; content: string }>).find((m) => m.role === 'system')!.content;
-    expect(systemMsg).toContain('Schema name: product_intelligence');
-    expect(systemMsg).toContain('"type":"object"');
-  });
-
-  it('auto 模式：json-object→text-json 降级后 system prompt 包含真实 JSON Schema', async () => {
-    const textJsonAutoConfig = { ...autoConfig, compatibility: { ...baseCompat, structuredOutput: 'json-object' as const } };
-    let callCount = 0;
-    let secondBody: Record<string, unknown> = {};
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
-      callCount += 1;
-      const body = JSON.parse(String(init.body));
-      if (callCount === 1) {
-        expect((body.response_format as { type: string }).type).toBe('json_object');
-        return Response.json({ error: { message: 'json_object not supported' } }, { status: 400 });
-      }
-      secondBody = body;
-      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
-    }));
-    // json-object config is not auto, so no fallback — it should fail
-    await expect(new OpenAICompatibleVisionProvider(textJsonAutoConfig).analyze(analysisInput())).rejects.toThrow();
-    expect(callCount).toBe(1);
-  });
-
-  it('auto 模式：200 schema-invalid 最多 1 次 retry，retry 包含真实 JSON Schema', async () => {
-    let callCount = 0;
-    let secondBody: Record<string, unknown> = {};
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
-      callCount += 1;
-      const body = JSON.parse(String(init.body));
-      if (callCount === 1) {
-        // Return valid JSON but with wrong structure (empty category)
         return Response.json({ choices: [{ message: { content: JSON.stringify({ ...payload, analysis: { ...payload.analysis, category: '' } }) } }] });
       }
-      secondBody = body;
       return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
     }));
     await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).resolves.toEqual(payload);
     expect(callCount).toBe(2);
-    // Second attempt should be json-object (downgraded from json-schema)
-    expect((secondBody.response_format as { type: string }).type).toBe('json_object');
-    const systemMsg = (secondBody.messages as Array<{ role: string; content: string }>).find((m) => m.role === 'system')!.content;
-    expect(systemMsg).toContain('Schema name: product_intelligence');
-    expect(systemMsg).toContain('"type":"object"');
   });
 
   it('auto 模式：401/403/429/500 不触发 capability fallback', async () => {
@@ -212,22 +189,10 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
     expect(evidenceItems.enum).toEqual([assetId, referenceId]);
   });
 
-  it('Hero planning 消费同一 structured adapter', async () => {
-    let captured: Record<string, unknown> = {};
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
-      captured = JSON.parse(String(init.body));
-      return Response.json({ choices: [{ message: { content: JSON.stringify({ prompt: 'A natural product hero scene.' }) } }] });
-    }));
-    await expect(new OpenAICompatibleVisionProvider(jsonSchemaConfig).planHero({ ...heroInput(), creativeIntent: '雨夜归家' })).resolves.toEqual({ prompt: 'A natural product hero scene.' });
-    expect(captured).toMatchObject({ model: jsonSchemaConfig.model, stream: false });
-    expect(captured).not.toHaveProperty('enable_thinking');
-    expect(captured.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: true } });
-  });
-
   it('单元素 Product Intelligence 数组仅在完整通过 Zod 后解包并记录归一化', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: JSON.stringify([payload]) } }] })));
     await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).resolves.toEqual(payload);
-    await expect(lastLog()).resolves.toMatchObject({ status: 'succeeded', normalization: 'single-item-array-unwrapped' });
+    await expect(lastLog()).resolves.toMatchObject({ status: 'succeeded', extra: expect.objectContaining({ normalization: 'single-item-array-unwrapped' }) });
   });
 
   it.each([
@@ -250,59 +215,147 @@ describe('OpenAI 兼容识图 Provider（模型无关）', () => {
     await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).rejects.toThrow(/AI 返回结果无法解析（诊断编号：[0-9a-f]{8}）/);
     const event = await lastLog();
     expect(event.failureStage).toBe(stage);
-    if (stage === 'schema-validate') expect(event.zodIssues).toEqual(expect.any(Array));
+    if (stage === 'schema-validate') expect((event.extra as Record<string, unknown>).zodIssues).toEqual(expect.any(Array));
   });
 
-  it('HTTP 失败记录安全诊断且保留既有中文错误', async () => {
+  it('HTTP 失败保留既有中文错误', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('provider failure', { status: 401 })));
     await expect(new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput())).rejects.toThrow(/Key 无效/);
   });
 
-  it('planHeroV2 注入人物偏好、创意程度与商品理解，并解析 HeroPlanV2', async () => {
+  /* ── Hero Director ── */
+
+  it('directHero 使用结构化 HeroBrief schema，模型名保持 opaque', async () => {
     let captured: Record<string, unknown> = {};
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       captured = JSON.parse(String(init.body));
-      return Response.json({ choices: [{ message: { content: JSON.stringify(planV2Payload) } }] });
+      return Response.json({ choices: [{ message: { content: JSON.stringify(briefPayload) } }] });
     }));
-    await expect(new OpenAICompatibleVisionProvider(jsonObjectConfig).planHeroV2(planV2Input())).resolves.toEqual(planV2Payload);
+    await expect(new OpenAICompatibleVisionProvider(jsonSchemaConfig).directHero(directorInput())).resolves.toEqual(briefPayload);
+    expect(captured.model).toBe('future-vision-model-2099');
+    const format = captured.response_format as { type: string; json_schema: { name: string; strict: boolean; schema: Record<string, unknown> } };
+    expect(format).toMatchObject({ type: 'json_schema', json_schema: { strict: true, name: 'hero_brief' } });
+    // HeroBrief 不含 prompt 字段（Director 不写最终生成 prompt）
+    expect(JSON.stringify(format.json_schema.schema)).not.toContain('"prompt"');
+    // 只输入一张源图
+    const content = (captured.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>).find((message) => message.role === 'user')!.content;
+    expect(content.filter((item) => item.type === 'image_url')).toHaveLength(1);
+    await expect(lastLog()).resolves.toMatchObject({ operation: 'hero-director', status: 'succeeded', parsedResult: briefPayload });
+  });
+
+  it('Director 不消费 Product Intelligence，只依赖源图', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(briefPayload) } }] });
+    }));
+    const input = directorInput();
+    expect(input).not.toHaveProperty('intelligence');
+    expect(input).not.toHaveProperty('productUnderstanding');
+    await new OpenAICompatibleVisionProvider(autoConfig).directHero(input);
     const body = JSON.stringify(captured);
-    expect(body).toContain('must not include any person');
-    expect(body).toContain('bolder staging');
+    expect(body).toContain('ecommerce photography director');
+    expect(body).not.toContain('Product understanding from prior analysis');
     expect(body).toContain('雨夜归家');
-    expect(body).toContain('Product understanding from prior analysis');
-    expect(captured.response_format).toEqual({ type: 'json_object' });
-    await expect(lastLog()).resolves.toMatchObject({ operation: 'vision.hero-plan-v2', status: 'succeeded', structuredMode: 'json-object' });
   });
 
-  it('planHeroV2 strict 模式下所有根字段必填（含可选的 altPrompt）', async () => {
+  it('require 政策注入硬人物约束并返回 human-interaction 策划', async () => {
     let captured: Record<string, unknown> = {};
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       captured = JSON.parse(String(init.body));
-      return Response.json({ choices: [{ message: { content: JSON.stringify(planV2Payload) } }] });
+      return Response.json({ choices: [{ message: { content: JSON.stringify(humanBriefPayload) } }] });
     }));
-    await new OpenAICompatibleVisionProvider(jsonSchemaConfig).planHeroV2(planV2Input());
-    const format = captured.response_format as { type: string; json_schema: { strict: boolean; schema: Record<string, unknown> } };
-    expect(format.type).toBe('json_schema');
-    expect(format.json_schema.strict).toBe(true);
-    expect(format.json_schema.schema).toMatchObject({ additionalProperties: false });
-    expect(format.json_schema.schema.required).toEqual(expect.arrayContaining(['title', 'displayMode', 'preserve', 'prompt', 'altPrompt']));
+    const result = await new OpenAICompatibleVisionProvider(autoConfig).directHero(directorInput('require'));
+    expect(JSON.stringify(captured)).toContain('presentation.mode MUST be human-interaction');
+    expect(result.presentation.mode).toBe('human-interaction');
   });
 
-  it('reviewHero 提交原图与生成图并解析 HeroReview', async () => {
+  it('avoid 政策注入硬无人约束并返回 scene-staging 策划', async () => {
     let captured: Record<string, unknown> = {};
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
       captured = JSON.parse(String(init.body));
-      return Response.json({ choices: [{ message: { content: JSON.stringify(reviewPayload) } }] });
+      return Response.json({ choices: [{ message: { content: JSON.stringify(briefPayload) } }] });
     }));
-    await expect(new OpenAICompatibleVisionProvider(jsonObjectConfig).reviewHero(reviewInput())).resolves.toEqual(reviewPayload);
+    const result = await new OpenAICompatibleVisionProvider(autoConfig).directHero(directorInput('avoid'));
+    expect(JSON.stringify(captured)).toContain('presentation.mode MUST be scene-staging');
+    expect(result.presentation.mode).toBe('scene-staging');
+  });
+
+  it('HeroBrief 的 nullable 字段在 strict schema 中以 type 数组表达', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(briefPayload) } }] });
+    }));
+    await new OpenAICompatibleVisionProvider(jsonSchemaConfig).directHero(directorInput());
+    const format = captured.response_format as { json_schema: { schema: Record<string, unknown> } };
+    const presentation = ((format.json_schema.schema.properties as Record<string, Record<string, unknown>>).presentation.properties as Record<string, Record<string, unknown>>);
+    expect(presentation.interaction.type).toEqual(['string', 'null']);
+    expect(presentation.scaleCue.type).toEqual(['string', 'null']);
+  });
+
+  /* ── Hero 批量 QA ── */
+
+  it('reviewHeroBatch 一次请求包含源图与全部候选图并解析批量评估', async () => {
+    let captured: Record<string, unknown> = {};
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(String(init.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(batchReviewPayload) } }] });
+    }));
+    await expect(new OpenAICompatibleVisionProvider(jsonObjectConfig).reviewHeroBatch(batchReviewInput())).resolves.toEqual(batchReviewPayload);
     const content = (captured.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>).find((message) => message.role === 'user')!.content;
     const images = content.filter((item) => item.type === 'image_url');
-    expect(images).toHaveLength(2);
+    expect(images).toHaveLength(3);
+    expect(content.filter((item) => item.type === 'text').map((item) => item.text).join(' ')).toContain('Candidate 1');
     const body = JSON.stringify(captured);
-    expect(body).toContain('human-interaction');
     expect(body).toContain('白色杯身');
-    expect(body).toContain('score>=70');
-    await expect(lastLog()).resolves.toMatchObject({ operation: 'vision.hero-review', status: 'succeeded' });
+    expect(body).toContain('topology_broken');
+    await expect(lastLog()).resolves.toMatchObject({ operation: 'hero-batch-review', status: 'succeeded', parsedResult: batchReviewPayload });
+  });
+
+  /* ── 请求级日志 ── */
+
+  it('一次逻辑操作的协议降级写两个独立请求日志文件并共享 traceId', async () => {
+    const before = await logFiles();
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return Response.json({ error: { message: 'json_schema not supported' } }, { status: 400 });
+      }
+      return Response.json({ choices: [{ message: { content: JSON.stringify(payload) } }] });
+    }));
+    await new OpenAICompatibleVisionProvider(autoConfig).analyze(analysisInput());
+    const after = await logFiles();
+    const created = after.filter((file) => !before.includes(file));
+    expect(created).toHaveLength(2);
+    const [first, second] = await Promise.all(created.map(async (file) => {
+      const dir = path.join(root, '.runtime', 'logs', 'ai', new Date().toISOString().slice(0, 10));
+      return JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'));
+    }));
+    expect(first.status).toBe('failed');
+    expect(second.status).toBe('succeeded');
+    expect(first.requestId).not.toBe(second.requestId);
+    expect(first.traceId).toBe(second.traceId);
+  });
+
+  it('日志文件不含 API Key / Authorization / data 图片，但保留文本 prompt', async () => {
+    const before = await logFiles();
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: JSON.stringify(briefPayload) } }] })));
+    await new OpenAICompatibleVisionProvider(autoConfig).directHero(directorInput());
+    const after = await logFiles();
+    const created = after.filter((file) => !before.includes(file));
+    expect(created).toHaveLength(1);
+    const dir = path.join(root, '.runtime', 'logs', 'ai', new Date().toISOString().slice(0, 10));
+    const raw = await fs.readFile(path.join(dir, created[0]), 'utf8');
+    expect(raw).not.toContain('sk-sp-exact-key');
+    expect(raw).not.toContain('Bearer ');
+    expect(raw).not.toMatch(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]{20}/);
+    expect(raw).toContain('[IMAGE_REDACTED]');
+    expect(raw).toContain('ecommerce photography director');
+    expect(raw).toContain('https://stored.example/vision');
+    expect(raw).not.toContain('?key=ignored');
+    expect(created[0]).toMatch(/hero-director_[0-9a-f]{8}\.json$/);
   });
 
   /* ── Protocol fallback / schema retry 独立状态机 ── */

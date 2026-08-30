@@ -91,7 +91,7 @@ export function CollageControls({
             </div>
             <button type="button" className="btn" onClick={applyRecommendedCopy}>应用推荐文案</button>
           </>
-        ) : <div className="hint">分析商品后可获得有图片依据的标题与卖点建议，手动编辑仍可直接使用。</div>}
+        ) : <div className="hint">AI 文案建议会在需要时自动准备；也可以直接手动填写。</div>}
       </div>
 
       <div className="field">

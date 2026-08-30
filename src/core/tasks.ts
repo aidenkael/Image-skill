@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { HeroHumanPolicy } from './hero-workflow';
-import { HeroCreativeLevelSchema, HeroHumanPolicySchema, HeroRatioSchema } from './hero-workflow';
+import { HeroHumanPolicySchema, HeroRatioSchema } from './hero-workflow';
 import { TaskResultSchema } from './results';
 
 export type { HeroRatio } from './hero-workflow';
@@ -15,43 +15,35 @@ export type TaskKind = (typeof TASK_KINDS)[number];
 
 export const EXECUTABLE_TASK_KINDS: readonly TaskKind[] = ['hero', 'collage', 'optimize'];
 
-export const HeroCreativeModeSchema = z.enum(['recommended', 'custom']);
-export type HeroCreativeMode = z.infer<typeof HeroCreativeModeSchema>;
-
 export const HeroHumanPresenceSchema = HeroHumanPolicySchema;
 export type HeroHumanPresence = HeroHumanPolicy;
 
-/** 历史 Hero 选项值映射：free|concept→recommended、none→avoid、involved→require */
+/**
+ * 历史 Hero 选项值迁移预处理（仅用于读取旧存储草稿/任务）：
+ * humanPresence none→avoid、involved→require；
+ * 删除已废弃的 creativeMode/creativeLevel/planId/conceptId；保留旧字符串 creativeIntent。
+ */
 export function normalizeLegacyHeroOptionsValue(value: unknown): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
   const options = { ...(value as Record<string, unknown>) };
-  if (options.creativeMode === 'free' || options.creativeMode === 'concept') {
-    options.creativeMode = 'recommended';
-  }
   if (options.humanPresence === 'none') options.humanPresence = 'avoid';
   if (options.humanPresence === 'involved') options.humanPresence = 'require';
+  if (typeof options.creativeIntent !== 'string') delete options.creativeIntent;
+  delete options.creativeMode;
+  delete options.creativeLevel;
+  delete options.planId;
   delete options.conceptId;
   return options;
 }
 
+/** 一键 Hero 用户选项：源图 + 比例 + 可选创作要求 + 人物偏好 */
 export const HeroTaskOptionsSchema = z.preprocess(
   normalizeLegacyHeroOptionsValue,
   z.object({
     sourceAssetId: z.string().min(1),
     ratio: HeroRatioSchema,
-    creativeMode: HeroCreativeModeSchema.default('recommended'),
     creativeIntent: z.string().trim().max(500).optional(),
     humanPresence: HeroHumanPresenceSchema.default('auto'),
-    creativeLevel: HeroCreativeLevelSchema.default('balanced'),
-    planId: z.string().uuid().optional(),
-  }).superRefine((value, ctx) => {
-    if (value.creativeMode === 'custom' && !value.creativeIntent?.trim()) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['creativeIntent'],
-        message: '请填写你的创作想法',
-      });
-    }
   }),
 );
 export type HeroTaskOptions = z.infer<typeof HeroTaskOptionsSchema>;
@@ -161,9 +153,6 @@ export function validateCreateTaskRequest(
       throw new TaskValidationError(
         '氛围主图必须且只能提交一张源商品图片，并与 sourceAssetId 一致',
       );
-    }
-    if (!parsed.data.planId) {
-      throw new TaskValidationError('氛围主图生成需要先获取 AI 方案，请先生成方案');
     }
   } else if (req.kind === 'collage') {
     const parsed = CollageTaskOptionsSchema.safeParse(req.options);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AssetRole } from '@/core/assets';
+import type { AssetRef, AssetRole } from '@/core/assets';
 import { assetUrl } from '@/core/results';
 import type { TemplateDocument } from '@/core/templates';
 import { AssetPanel } from '@/features/assets/components/AssetPanel';
@@ -16,7 +16,10 @@ import {
   sanitizeCollageDocumentAssets,
 } from '@/features/collage/model/collage';
 import { HeroControls } from '@/features/hero/components/HeroControls';
-import { ProductInsightBar } from '@/features/intelligence/components/ProductInsightBar';
+import {
+  intelligenceMatchesSelection,
+  intelligenceSelectionKey,
+} from '@/features/intelligence/model/match';
 import { useProductIntelligence } from '@/features/intelligence/model/useProductIntelligence';
 import { OptimizeControls } from '@/features/optimize/components/OptimizeControls';
 import { useAISettings } from '@/features/system/model/useSystemStatus';
@@ -35,7 +38,15 @@ export function Workbench() {
   const templates = listCollageTemplates();
   const workspaceId = workspaces.activeWorkspaceId;
   const collageDoc = wb.collageVariants[wb.activeCollageVariant] ?? null;
-  const freshIntelligence = intelligence.fresh ? intelligence.record : null;
+  // Collage 只消费与当前选择精确匹配的 Intelligence（文案必须有当前图片依据）
+  const selectedCollageAssets = wb.selectedAssetIds
+    .map((id) => wb.assets.find((asset) => asset.id === id))
+    .filter((asset): asset is AssetRef => asset !== undefined && asset.role !== 'reference');
+  const selectionKey = intelligenceSelectionKey(selectedCollageAssets);
+  const matchingIntelligence = intelligenceMatchesSelection(intelligence.record, selectedCollageAssets)
+    ? intelligence.record
+    : null;
+  const analyzedSelectionKeysRef = useRef(new Set<string>());
   const lockedAssetIds = new Set<string>();
   for (const id of intelligence.lockedAssetIds) lockedAssetIds.add(id);
   if (wb.latestHeroTask?.status === 'running') {
@@ -53,16 +64,27 @@ export function Workbench() {
     if (wb.hydrated && wb.kind === 'detail') wb.setKind('hero');
   }, [wb.hydrated, wb.kind, wb.setKind]);
 
+  // Collage 惰性后台分析：需要文案依据时自动准备，无手动按钮；
+  // 同一选择键不重复触发，失败不阻塞确定性布局创建。
+  useEffect(() => {
+    if (!workspaceId || !wb.hydrated || wb.kind !== 'collage') return;
+    if (!aiSettings.settings?.activeVisionProfileId) return;
+    if (selectedCollageAssets.length === 0) return;
+    if (matchingIntelligence) return;
+    if (intelligence.analyzing) return;
+    const dedupeKey = `${workspaceId}:${selectionKey}`;
+    if (analyzedSelectionKeysRef.current.has(dedupeKey)) return;
+    analyzedSelectionKeysRef.current.add(dedupeKey);
+    void intelligence.analyze(selectedCollageAssets.map((asset) => asset.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, wb.hydrated, wb.kind, selectionKey, matchingIntelligence, intelligence.analyzing, aiSettings.settings?.activeVisionProfileId]);
+
   useEffect(() => {
     if (!workspaceId || !wb.hydrated || wb.kind !== 'collage' || !collageDoc) return;
     void collageEditorRef.current?.createLayout(collageDoc);
     // 文档内容变化由 onDocumentChange 回传，不能因此重建 Fabric 画布。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, wb.hydrated, wb.kind, wb.activeCollageVariant]);
-
-  const handleAnalyze = useCallback(async () => {
-    await intelligence.analyze(wb.selectedAssetIds);
-  }, [intelligence, wb]);
 
   const handleCreateLayout = useCallback(async () => {
     const task = await wb.createCollageTask();
@@ -209,18 +231,6 @@ export function Workbench() {
           />
 
           <main className="center-column">
-            <ProductInsightBar
-              assetCount={wb.assets.length}
-              selectedCount={wb.selectedAssetIds.length}
-              record={intelligence.record}
-              loading={intelligence.loading}
-              analyzing={intelligence.analyzing}
-              error={intelligence.error}
-              fresh={intelligence.fresh}
-              hasUnanalyzedAssets={intelligence.hasUnanalyzedAssets}
-              aiConfigured={Boolean(aiSettings.settings?.activeVisionProfileId)}
-              onAnalyze={() => void handleAnalyze()}
-            />
             {wb.assets.length === 0 ? (
               <section className="canvas-area empty-upload-state">
                 <div><strong>先上传商品图片</strong><span>建议准备正面主图和能看清商品细节的图片。</span></div>
@@ -252,11 +262,8 @@ export function Workbench() {
                 busy={wb.heroBusy}
                 visionConfigured={Boolean(aiSettings.settings?.activeVisionProfileId)}
                 imageConfigured={Boolean(aiSettings.settings?.activeImageProfileId)}
-                heroPlan={wb.heroPlan}
-                planLoading={wb.heroPlanLoading}
                 onChange={wb.patchHeroOptions}
                 onCountChange={wb.setHeroCount}
-                onGeneratePlan={() => void wb.generateHeroPlan()}
                 onGenerate={() => void wb.runHero()}
               />
             ) : null}
@@ -270,7 +277,7 @@ export function Workbench() {
                 busy={wb.collageBusy}
                 collageDoc={collageDoc}
                 assets={wb.assets}
-                intelligence={freshIntelligence}
+                intelligence={matchingIntelligence}
                 onChange={wb.patchCollageOptions}
                 onCountChange={wb.setCollageCount}
                 onCreateLayout={() => void handleCreateLayout()}

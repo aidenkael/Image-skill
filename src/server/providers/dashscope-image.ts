@@ -1,12 +1,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { writeAILog } from '@/server/logging/ai-log';
+import { writeAIRequestLog } from '@/server/logging/ai-log';
 import type { ResolvedImageConfig } from '@/server/settings/ai';
 import type { GeneratedImage, ImageGenerationInput, ImageProvider } from './image-provider';
 import { ProviderConfigError, ProviderRequestError, providerFetchError, providerHttpError } from './provider-errors';
 
-type ImageLogFn = (event: Omit<Parameters<typeof writeAILog>[0], 'requestId' | 'operation' | 'profileId' | 'driver' | 'provider' | 'model' | 'endpoint' | 'durationMs' | 'apiKey' | 'count' | 'ratio'> & { batchMode?: string; compatibilityFallback?: string }) => Promise<void>;
+/**
+ * 日志约定：一个实际 provider HTTP 请求 = 一个独立日志文件。
+ * 原生批量不可用/提示词扩写不可用等协议降级，各自是新的 HTTP 请求与新文件。
+ */
 
 const MIME_BY_EXT: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
@@ -51,6 +54,43 @@ class PromptExtendUnsupportedError extends Error {
   }
 }
 
+/** Marker: native batch is unsupported by the protocol (auto mode may fall back to single). */
+class BatchUnsupportedError extends Error {
+  constructor() { super('batch unsupported'); }
+}
+
+/** 从响应正文提取图片；携带失败阶段以便同一请求只写一次日志。 */
+function extractImagesFromBody(raw: string, expectedCount: number): GeneratedImage[] {
+  let body: unknown;
+  try { body = JSON.parse(raw); } catch {
+    throw new ExtractError('response-json', new ProviderRequestError('AI 返回结果无法解析，请重新尝试。'), raw);
+  }
+  const output = ((body as { output?: unknown }).output ?? {}) as {
+    choices?: { message?: { content?: { image?: string }[] } }[];
+    results?: { url?: string }[];
+  };
+  const images: GeneratedImage[] = [];
+  for (const choice of output.choices ?? []) {
+    const url = choice.message?.content?.find((item) => item.image)?.image;
+    if (url) images.push({ url });
+  }
+  for (const item of output.results ?? []) if (item.url) images.push({ url: item.url });
+  if (images.length < expectedCount) {
+    throw new ExtractError('content-extract', new ProviderRequestError(`模型返回结果数量不完整：要求 ${expectedCount} 张，实际 ${images.length} 张`), raw);
+  }
+  return images.slice(0, expectedCount);
+}
+
+class ExtractError extends Error {
+  constructor(
+    readonly stage: string,
+    readonly inner: ProviderRequestError,
+    readonly raw: string,
+  ) {
+    super(inner.message);
+  }
+}
+
 export class DashScopeImageProvider implements ImageProvider {
   constructor(private readonly config: ResolvedImageConfig) {}
 
@@ -68,29 +108,52 @@ export class DashScopeImageProvider implements ImageProvider {
     const size = resolveSize(this.config, input.ratio);
     const batchMode = this.config.compatibility.batchMode;
 
-    const requestId = crypto.randomUUID();
-    const started = Date.now();
-    const log = (event: Omit<Parameters<typeof writeAILog>[0], 'requestId' | 'operation' | 'profileId' | 'driver' | 'provider' | 'model' | 'endpoint' | 'durationMs' | 'apiKey' | 'count' | 'ratio'> & { batchMode?: string; compatibilityFallback?: string }) => writeAILog({
-      ...event, requestId, operation: 'image.generation', profileId: this.config.profileId,
-      driver: this.config.driver, provider: this.config.driver, model: this.config.model,
-      endpoint: this.config.endpoint, apiKey: this.config.apiKey, durationMs: Date.now() - started,
-      count: input.count, ratio: input.ratio,
-    });
-
     const useNativeBatch = batchMode === 'native' || batchMode === 'auto';
 
     if (useNativeBatch) {
       try {
-        return await this.generateNative(input, imageUri, size, log);
+        return await this.generateNative(input, imageUri, size);
       } catch (error) {
         if (error instanceof BatchUnsupportedError && batchMode === 'auto') {
-          return this.generateSingle(input, imageUri, size, log);
+          return this.generateSingle(input, imageUri, size);
         }
         throw error;
       }
     }
 
-    return this.generateSingle(input, imageUri, size, log);
+    return this.generateSingle(input, imageUri, size);
+  }
+
+  /** 为一次实际 HTTP 请求构造一次性日志写入函数。 */
+  private requestLogger(requestId: string, started: number, extraBase: Record<string, unknown>) {
+    return (event: {
+      status: 'succeeded' | 'failed';
+      httpStatus?: number;
+      failureStage?: string;
+      errorName?: string;
+      errorMessage?: string;
+      requestBody?: unknown;
+      responseBody?: unknown;
+      extra?: Record<string, unknown>;
+    }) => writeAIRequestLog({
+      timestamp: new Date().toISOString(),
+      requestId,
+      operation: 'image-generation',
+      profileId: this.config.profileId,
+      driver: this.config.driver,
+      model: this.config.model,
+      endpoint: this.config.endpoint,
+      durationMs: Date.now() - started,
+      status: event.status,
+      ...(event.httpStatus !== undefined ? { httpStatus: event.httpStatus } : {}),
+      ...(event.failureStage ? { failureStage: event.failureStage } : {}),
+      ...(event.errorName ? { errorName: event.errorName } : {}),
+      ...(event.errorMessage !== undefined ? { errorMessage: event.errorMessage } : {}),
+      ...(event.requestBody !== undefined ? { requestBody: event.requestBody } : {}),
+      ...(event.responseBody !== undefined ? { responseBody: event.responseBody } : {}),
+      redact: [this.config.apiKey],
+      extra: { ...extraBase, ...event.extra },
+    });
   }
 
   /**
@@ -102,7 +165,6 @@ export class DashScopeImageProvider implements ImageProvider {
     prompt: string,
     size: string | undefined,
     promptExtend: boolean | undefined,
-    log: ImageLogFn,
   ): Promise<GeneratedImage> {
     const parameters: Record<string, unknown> = { n: 1 };
     if (promptExtend !== undefined) parameters.prompt_extend = promptExtend;
@@ -114,6 +176,10 @@ export class DashScopeImageProvider implements ImageProvider {
       parameters,
     };
 
+    const requestId = crypto.randomUUID();
+    const started = Date.now();
+    const log = this.requestLogger(requestId, started, { batchMode: 'single', count: 1 });
+
     let response: Response;
     try {
       response = await fetch(this.config.endpoint, {
@@ -123,21 +189,36 @@ export class DashScopeImageProvider implements ImageProvider {
         signal: AbortSignal.timeout(180_000),
       });
     } catch (error) {
-      await log({ status: 'failed', failureStage: 'fetch', errorName: error instanceof Error ? error.name : undefined, errorMessage: error instanceof Error ? error.message : 'Unknown error', batchMode: 'single' });
+      await log({ status: 'failed', failureStage: 'fetch', requestBody: payload,
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error' });
       throw providerFetchError(error);
     }
 
+    const responseRaw = await response.text();
     if (!response.ok) {
-      const responseSnippet = await response.text();
-      if (promptExtend !== undefined && isPromptExtendUnsupported(response.status, responseSnippet)) {
-        throw new PromptExtendUnsupportedError(response.status, responseSnippet);
-      }
-      await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet, batchMode: 'single' });
-      console.error(`[ai] image.generation failed requestId=${(crypto.randomUUID()).slice(0, 8)}`);
+      const promptExtendRejected = promptExtend !== undefined && isPromptExtendUnsupported(response.status, responseRaw);
+      await log({
+        status: 'failed', failureStage: 'http', httpStatus: response.status,
+        requestBody: payload, responseBody: responseRaw,
+        ...(promptExtendRejected ? { extra: { promptExtendUnsupported: true } } : {}),
+      });
+      if (promptExtendRejected) throw new PromptExtendUnsupportedError(response.status, responseRaw);
+      console.error(`[ai] image-generation failed requestId=${requestId.slice(0, 8)}`);
       throw providerHttpError(response.status);
     }
 
-    const images = await this.extractImages(response, 1, log, 'single');
+    let images: GeneratedImage[];
+    try {
+      images = extractImagesFromBody(responseRaw, 1);
+    } catch (error) {
+      if (error instanceof ExtractError) {
+        await log({ status: 'failed', failureStage: error.stage, httpStatus: response.status, requestBody: payload, responseBody: error.raw });
+        throw error.inner;
+      }
+      throw error;
+    }
+    await log({ status: 'succeeded', httpStatus: response.status, requestBody: payload, responseBody: JSON.parse(responseRaw) });
     return images[0];
   }
 
@@ -145,24 +226,22 @@ export class DashScopeImageProvider implements ImageProvider {
     input: ImageGenerationInput,
     imageUri: string,
     size: string | undefined,
-    log: ImageLogFn,
   ): Promise<GeneratedImage[]> {
     const results: GeneratedImage[] = [];
     let usePromptExtend = resolvePromptExtend(this.config);
 
     for (let index = 0; index < input.count; index += 1) {
       try {
-        const image = await this.requestSingle(imageUri, input.prompt, size, usePromptExtend, log);
+        const image = await this.requestSingle(imageUri, input.prompt, size, usePromptExtend);
         results.push(image);
       } catch (error) {
         if (error instanceof PromptExtendUnsupportedError) {
           if (this.config.compatibility.promptEnhancement !== 'auto') {
-            await log({ status: 'failed', failureStage: 'http', httpStatus: error.httpStatus, responseSnippet: error.snippet, batchMode: 'single' });
             throw new ProviderConfigError('提示词扩写功能不被当前图片模型支持，请将 promptEnhancement 改为 auto 或 off。');
           }
           // auto: drop prompt_extend, retry current image, continue rest without it
           usePromptExtend = undefined;
-          const retryImage = await this.requestSingle(imageUri, input.prompt, size, undefined, log);
+          const retryImage = await this.requestSingle(imageUri, input.prompt, size, undefined);
           results.push(retryImage);
         } else {
           throw error;
@@ -180,7 +259,6 @@ export class DashScopeImageProvider implements ImageProvider {
     input: ImageGenerationInput,
     imageUri: string,
     size: string | undefined,
-    log: ImageLogFn,
   ): Promise<GeneratedImage[]> {
     const promptExtend = resolvePromptExtend(this.config);
     const parameters: Record<string, unknown> = { n: input.count };
@@ -193,6 +271,10 @@ export class DashScopeImageProvider implements ImageProvider {
       parameters,
     };
 
+    const requestId = crypto.randomUUID();
+    const started = Date.now();
+    const log = this.requestLogger(requestId, started, { batchMode: 'native', count: input.count });
+
     let response: Response;
     try {
       response = await fetch(this.config.endpoint, {
@@ -202,37 +284,54 @@ export class DashScopeImageProvider implements ImageProvider {
         signal: AbortSignal.timeout(180_000),
       });
     } catch (error) {
-      await log({ status: 'failed', failureStage: 'fetch', errorName: error instanceof Error ? error.name : undefined, errorMessage: error instanceof Error ? error.message : 'Unknown error', batchMode: 'native' });
+      await log({ status: 'failed', failureStage: 'fetch', requestBody: payload,
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error' });
       throw providerFetchError(error);
     }
 
+    const responseRaw = await response.text();
     if (!response.ok) {
-      const responseSnippet = await response.text();
-      if (isBatchUnsupported(response.status, responseSnippet)) {
-        await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet, batchMode: 'native', compatibilityFallback: 'single' });
-        throw new BatchUnsupportedError();
-      }
-      if (promptExtend !== undefined && isPromptExtendUnsupported(response.status, responseSnippet)) {
+      const batchRejected = isBatchUnsupported(response.status, responseRaw);
+      const promptExtendRejected = promptExtend !== undefined && isPromptExtendUnsupported(response.status, responseRaw);
+      await log({
+        status: 'failed', failureStage: 'http', httpStatus: response.status,
+        requestBody: payload, responseBody: responseRaw,
+        extra: {
+          ...(batchRejected ? { compatibilityFallback: 'single' } : {}),
+          ...(promptExtendRejected ? { promptExtendUnsupported: true } : {}),
+        },
+      });
+      if (batchRejected) throw new BatchUnsupportedError();
+      if (promptExtendRejected) {
         if (this.config.compatibility.promptEnhancement === 'on') {
-          await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet, batchMode: 'native' });
           throw new ProviderConfigError('提示词扩写功能不被当前图片模型支持，请将 promptEnhancement 改为 auto 或 off。');
         }
-        // auto: retry native without prompt_extend
-        return this.generateNativeWithoutPromptExtend(input, imageUri, size, log);
+        // auto: retry native without prompt_extend (new HTTP request, new log file)
+        return this.generateNativeWithoutPromptExtend(input, imageUri, size);
       }
-      await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet, batchMode: 'native' });
-      console.error(`[ai] image.generation failed requestId=${(crypto.randomUUID()).slice(0, 8)}`);
+      console.error(`[ai] image-generation failed requestId=${requestId.slice(0, 8)}`);
       throw providerHttpError(response.status);
     }
 
-    return this.extractImages(response, input.count, log, 'native');
+    let images: GeneratedImage[];
+    try {
+      images = extractImagesFromBody(responseRaw, input.count);
+    } catch (error) {
+      if (error instanceof ExtractError) {
+        await log({ status: 'failed', failureStage: error.stage, httpStatus: response.status, requestBody: payload, responseBody: error.raw });
+        throw error.inner;
+      }
+      throw error;
+    }
+    await log({ status: 'succeeded', httpStatus: response.status, requestBody: payload, responseBody: JSON.parse(responseRaw) });
+    return images;
   }
 
   private async generateNativeWithoutPromptExtend(
     input: ImageGenerationInput,
     imageUri: string,
     size: string | undefined,
-    log: ImageLogFn,
   ): Promise<GeneratedImage[]> {
     const parameters: Record<string, unknown> = { n: input.count };
     if (size) parameters.size = size;
@@ -243,6 +342,10 @@ export class DashScopeImageProvider implements ImageProvider {
       parameters,
     };
 
+    const requestId = crypto.randomUUID();
+    const started = Date.now();
+    const log = this.requestLogger(requestId, started, { batchMode: 'native', count: input.count });
+
     let response: Response;
     try {
       response = await fetch(this.config.endpoint, {
@@ -252,54 +355,30 @@ export class DashScopeImageProvider implements ImageProvider {
         signal: AbortSignal.timeout(180_000),
       });
     } catch (error) {
-      await log({ status: 'failed', failureStage: 'fetch', errorName: error instanceof Error ? error.name : undefined, errorMessage: error instanceof Error ? error.message : 'Unknown error', batchMode: 'native' });
+      await log({ status: 'failed', failureStage: 'fetch', requestBody: payload,
+        errorName: error instanceof Error ? error.name : undefined,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error' });
       throw providerFetchError(error);
     }
 
+    const responseRaw = await response.text();
     if (!response.ok) {
-      const responseSnippet = await response.text();
-      if (isBatchUnsupported(response.status, responseSnippet)) {
-        await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet, batchMode: 'native', compatibilityFallback: 'single' });
-        throw new BatchUnsupportedError();
-      }
-      await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet, batchMode: 'native' });
+      await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, requestBody: payload, responseBody: responseRaw });
+      if (isBatchUnsupported(response.status, responseRaw)) throw new BatchUnsupportedError();
       throw providerHttpError(response.status);
     }
 
-    return this.extractImages(response, input.count, log, 'native');
+    let images: GeneratedImage[];
+    try {
+      images = extractImagesFromBody(responseRaw, input.count);
+    } catch (error) {
+      if (error instanceof ExtractError) {
+        await log({ status: 'failed', failureStage: error.stage, httpStatus: response.status, requestBody: payload, responseBody: error.raw });
+        throw error.inner;
+      }
+      throw error;
+    }
+    await log({ status: 'succeeded', httpStatus: response.status, requestBody: payload, responseBody: JSON.parse(responseRaw) });
+    return images;
   }
-
-  private async extractImages(
-    response: Response,
-    expectedCount: number,
-    log: ImageLogFn,
-    batchMode: string,
-  ): Promise<GeneratedImage[]> {
-    let body: unknown;
-    try { body = await response.json(); } catch {
-      await log({ status: 'failed', failureStage: 'response-json', httpStatus: response.status, batchMode });
-      throw new ProviderRequestError('AI 返回结果无法解析，请重新尝试。');
-    }
-    const output = ((body as { output?: unknown }).output ?? {}) as {
-      choices?: { message?: { content?: { image?: string }[] } }[];
-      results?: { url?: string }[];
-    };
-    const images: GeneratedImage[] = [];
-    for (const choice of output.choices ?? []) {
-      const url = choice.message?.content?.find((item) => item.image)?.image;
-      if (url) images.push({ url });
-    }
-    for (const item of output.results ?? []) if (item.url) images.push({ url: item.url });
-    if (images.length < expectedCount) {
-      await log({ status: 'failed', failureStage: 'content-extract', httpStatus: response.status, batchMode });
-      throw new ProviderRequestError(`模型返回结果数量不完整：要求 ${expectedCount} 张，实际 ${images.length} 张`);
-    }
-    await log({ status: 'succeeded', httpStatus: response.status, batchMode });
-    return images.slice(0, expectedCount);
-  }
-}
-
-/** Marker: native batch is unsupported by the protocol (auto mode may fall back to single). */
-class BatchUnsupportedError extends Error {
-  constructor() { super('batch unsupported'); }
 }

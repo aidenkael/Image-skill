@@ -1,12 +1,10 @@
 import type { AssetRole } from '@/core/assets';
 import type {
-  HeroCreativeLevel,
-  HeroDisplayMode,
+  HeroBatchReview,
+  HeroBrief,
   HeroHumanPolicy,
-  HeroPlanV2,
-  HeroReview,
 } from '@/core/hero-workflow';
-import type { HeroRuntimePlan, ProductIntelligencePayload } from '@/core/intelligence';
+import type { ProductIntelligencePayload } from '@/core/intelligence';
 
 export interface VisionAssetInput {
   assetId: string;
@@ -21,37 +19,38 @@ export interface ProductIntelligenceInput {
   assets: VisionAssetInput[];
 }
 
-export interface HeroPlanningInput {
+/**
+ * Hero Director 输入：只依赖源商品图本身，不消费 Product Intelligence。
+ * Product Intelligence 是独立的拼图文案/证据能力，不是 Hero 前置条件。
+ */
+export interface HeroDirectorInput {
   workspaceId: string;
-  workspaceName: string;
-  asset: VisionAssetInput;
-  creativeIntent?: string;
-}
-
-export interface HeroPlanV2Input {
-  workspaceId: string;
+  taskId: string;
   workspaceName: string;
   asset: VisionAssetInput;
   humanPolicy: HeroHumanPolicy;
-  creativeLevel: HeroCreativeLevel;
   creativeIntent?: string;
-  /** 新鲜 Product Intelligence 的商品理解（仅作策划上下文，不作为生成入口） */
-  productUnderstanding?: string;
 }
 
-export interface HeroReviewInput {
+/**
+ * 批量 QA 输入：一次调用包含源图 + 全部候选图。
+ */
+export interface HeroBatchReviewInput {
   workspaceId: string;
+  taskId: string;
   source: VisionAssetInput;
-  generated: VisionAssetInput;
-  displayMode: HeroDisplayMode;
+  generated: VisionAssetInput[];
+  brief: HeroBrief;
   humanPolicy: HeroHumanPolicy;
-  preserve: readonly string[];
-  flexible: readonly string[];
 }
 
-export interface ProductIntelligenceProvider {
+/**
+ * Vision 能力统一接口：商品分析、Hero 摄影策划（Director）、Hero 批量质检。
+ */
+export interface VisionProvider {
   analyze(input: ProductIntelligenceInput): Promise<ProductIntelligencePayload>;
-  planHero(input: HeroPlanningInput): Promise<HeroRuntimePlan>;
-  planHeroV2(input: HeroPlanV2Input): Promise<HeroPlanV2>;
-  reviewHero(input: HeroReviewInput): Promise<HeroReview>;
+
+  directHero(input: HeroDirectorInput): Promise<HeroBrief>;
+
+  reviewHeroBatch(input: HeroBatchReviewInput): Promise<HeroBatchReview>;
 }

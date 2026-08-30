@@ -1,19 +1,17 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { HeroPlanV2Schema, HeroReviewSchema } from '@/core/hero-workflow';
-import { HeroRuntimePlanSchema, ProductIntelligencePayloadSchema } from '@/core/intelligence';
-import { writeAILog } from '@/server/logging/ai-log';
+import { HeroBatchReviewSchema, HeroBriefSchema } from '@/core/hero-workflow';
+import { ProductIntelligencePayloadSchema } from '@/core/intelligence';
+import { writeAIRequestLog, type AIRequestLog } from '@/server/logging/ai-log';
 import type { ResolvedVisionConfig } from '@/server/settings/ai';
 import type {
-  HeroPlanV2Input,
-  HeroPlanningInput,
-  HeroReviewInput,
+  HeroBatchReviewInput,
+  HeroDirectorInput,
   ProductIntelligenceInput,
-  ProductIntelligenceProvider,
+  VisionProvider,
 } from './vision-provider';
 import { invalidProviderResponse, providerFetchError, providerHttpError } from './provider-errors';
 import {
-  buildStrictResponseFormat,
   downgradeMode,
   extractTextContent,
   extractResponseUsage,
@@ -23,7 +21,6 @@ import {
   resolveStructuredMode,
   sanitizeJsonSchema,
   zodIssues,
-  type StructuredOutputModeResult,
 } from './structured-output';
 
 export const SYSTEM_PROMPT = `You are an ecommerce product photographer and visual merchandising planner.
@@ -67,52 +64,71 @@ function restrictAssetValue(schema: JsonSchema, assetIds: string[]): void {
   schema.enum = assetIds;
 }
 
-const HUMAN_POLICY_INSTRUCTION: Record<HeroPlanV2Input['humanPolicy'], string> = {
-  auto: 'auto: decide yourself whether human presence helps the product story; include it only when it truly adds understanding.',
-  avoid: 'avoid: the final image must not include any person, hand, body part or human figure.',
-  require: 'require: the final image must include meaningful, natural human interaction with the product.',
-};
-
-const CREATIVE_LEVEL_INSTRUCTION: Record<HeroPlanV2Input['creativeLevel'], string> = {
-  conservative: 'conservative: prioritize structural fidelity; keep scene association light and close to a believable product photo.',
-  balanced: 'balanced: default commercial balance between fidelity and atmosphere.',
-  creative: 'creative: bolder staging, mood and expression are welcome, but product identity must never change.',
-};
-
-function planHeroV2Instruction(input: HeroPlanV2Input): string {
+/** Director 指令：紧凑、强决策导向，不做品类分类学（模型从可见商品自行推理）。 */
+function directHeroInstruction(input: HeroDirectorInput): string {
   const parts: string[] = [
-    `You are the lead ecommerce photographer and visual merchandising planner. Plan one atmosphere hero image for the product in the supplied photo.`,
+    'You are the ecommerce photography director.',
+    'Inspect the visible product before choosing presentation.',
+    'Choose the one strongest commercial presentation for THIS product. Do not produce multiple directions.',
+    'The central planning question: what visible presentation state lets a buyer understand the product, trust it, find it attractive, understand scale/use when relevant, and want to own it as quickly as possible? Do NOT frame the question as "is a person necessary?".',
+    'Identify fixed product identity separately from movable physical parts.',
+    'For movable straps/chains/handles/fabric components, preserve topology, attachment, quantity and approximate length/proportion, but allow natural gravity/use/pose changes. Do not freeze an articulated part into the exact 2D pose of the source image.',
+    'For a rigid product with no meaningful movable part, return movableParts as an empty array.',
+    'Lock product identity: overall shape/proportion, major structure/topology, quantity, major color/material appearance, visible pattern/logo/text, zippers/openings/hardware, attachment points, visible accessories.',
+    'Prefer believable commercial photography over decorative AI aesthetics.',
+    'Favor natural light integration, believable physical contact, credible scale, realistic gravity, natural depth of field, background detail consistent with lens/focus; the product must remain visually dominant.',
+    'Avoid excessive bokeh, abrupt foreground/background blur transitions, unmotivated cinematic blur, over-smooth materials, over-perfect cutout edges, implausible prop scale, and random decorative objects that compete with the product.',
+    'Do not invent product functions, accessories, materials, text, logos or claims.',
     `Workspace product: ${input.workspaceName}`,
-    `Before answering, reason about: (1) what is most worth expressing about this product; (2) what state a buyer most needs to see it in at first glance; (3) whether human presence is truly needed to convey scale, usage or wearing effect; (4) what environment enhances the product without stealing focus; (5) which physical/structural details are most prone to hallucination.`,
-    `Do not force multiple directions. Return exactly one JSON object matching the supplied schema: one main plan, plus altPrompt as a second interpretation.`,
-    `title, coreSellingAngle, scene, composition and riskChecks are user-facing Simplified Chinese; preserve/flexible items may be Chinese; prompt and altPrompt must be English generation prompts.`,
-    `preserve must lock the product identity: subject category, core structure/connection, count, dominant colors, dominant material appearance, logo/text/pattern, key hardware or accessories.`,
-    `flexible lists the soft aspects the generation may freely interpret (angle, staging state, scene, composition, camera, light, time of day, mood, whether a person appears).`,
-    `riskChecks lists the structural hallucinations most likely to happen with this product and therefore forbidden.`,
-    `displayMode: scene-staging (staged still life, tabletop or spatial display, hanging, non-human-led presentation) or human-interaction (holding, wearing, carrying, partial body participation).`,
-    `Human presence preference from the user: ${HUMAN_POLICY_INSTRUCTION[input.humanPolicy]}`,
-    `Creative level from the user: ${CREATIVE_LEVEL_INSTRUCTION[input.creativeLevel]}`,
   ];
-  if (input.productUnderstanding) {
-    parts.push(`Product understanding from prior analysis (visible facts only): ${input.productUnderstanding}`);
+  if (input.humanPolicy === 'require') {
+    parts.push('Human policy is a hard input constraint: require. presentation.mode MUST be human-interaction and interaction MUST describe meaningful holding/wearing/carrying/using/partial-body interaction.');
+  } else if (input.humanPolicy === 'avoid') {
+    parts.push('Human policy is a hard input constraint: avoid. presentation.mode MUST be scene-staging, interaction MUST be null, and no person/hand/body part may appear.');
+  } else {
+    parts.push('Human policy: auto. Choose human interaction when it materially improves wearing state, carrying state, hand-held use, human-product physical relationship or scale understanding; otherwise choose the strongest scene-staging presentation (placement, size reference, home/decor context, use location). Decide by buyer-information value, never because still-life is easier to generate.');
   }
   if (input.creativeIntent) {
-    parts.push(`User creative intent (preserve it while adapting it to the visible product): ${input.creativeIntent}`);
+    parts.push(`User creative intent (soft direction; it must never override product identity or physical constraints): ${input.creativeIntent}`);
   }
-  parts.push('Prioritize commercial usefulness, believable photography and low AI-looking output. Never change product identity.');
+  parts.push('All descriptive fields (title, reason, interaction, scene, camera, lighting, depthOfField, scaleCue, summary, fixedTraits, forbiddenChanges and movable part fields) must be Simplified Chinese.');
   return parts.join('\n');
 }
 
-function reviewHeroInstruction(input: HeroReviewInput): string {
-  return [
-    `You are an ecommerce photo reviewer. Image 1 is the original product photo; Image 2 is a generated atmosphere hero based on it.`,
-    `Planned display mode: ${input.displayMode}. Human presence policy: ${input.humanPolicy}.`,
-    `Must be preserved: ${input.preserve.join('; ')}.`,
-    `Allowed to vary: ${input.flexible.join('; ')}.`,
-    `Check only four aspects: (1) product identity, structure, count and connection errors against Image 1 - these are critical; (2) naturalness of the human-product relationship, only when displayMode is human-interaction; (3) believability of scene, scale and lighting; (4) obvious AI look and whether it is suitable as an ecommerce atmosphere hero.`,
-    `Return exactly one JSON object matching the supplied schema. summary and issues must be Simplified Chinese.`,
-    `score is an integer 0..100. passed=true only when score>=70 and there is no severe identity or structure error.`,
-  ].join('\n');
+/** 批量 QA 指令：明确区分「允许的姿态/状态变化」与「身份/拓扑改变」。 */
+function reviewHeroBatchInstruction(input: HeroBatchReviewInput): string {
+  const { brief } = input;
+  const candidateCount = input.generated.length;
+  const lastIndex = candidateCount - 1;
+  const parts: string[] = [
+    `You are the ecommerce visual QA reviewer. Image 1 is the original source product photo. Images 2 to ${candidateCount + 1} are generated hero candidates, indexed 0 to ${lastIndex} in order.`,
+    `Planned presentation: ${brief.presentation.mode}. Human policy: ${input.humanPolicy}.`,
+    `Product identity that must remain unchanged: ${brief.productIdentity.fixedTraits.join('; ')}.`,
+    `Forbidden product changes: ${brief.forbiddenChanges.join('; ')}.`,
+  ];
+  for (const part of brief.productIdentity.movableParts) {
+    parts.push(
+      `Movable part "${part.name}": fixed relationships ${part.fixedRelations.join('; ')}; ` +
+      `allowed natural motion ${part.allowedMotion.join('; ')}; never ${part.forbiddenChanges.join('; ')}.`,
+    );
+  }
+  parts.push(
+    'Distinguish allowed pose/state change from identity/topology change.',
+    'A chain/strap that bends or drapes differently is NOT a failure if it remains one continuous chain/strap with correct attachment points and plausible length.',
+    'A chain split into multiple decorative pieces is topology_broken. A strap connected to a different place is attachment_wrong.',
+    'A hand naturally touching/carrying the item is valid; a hand intersecting the product or impossible load/contact is impossible_human_contact.',
+    'Excessive bokeh or unnatural depth of field is a soft issue unless it produces a severe generation artifact.',
+    'Compare every candidate against the source image and the brief. Do not reward merely beautiful output if product structure is wrong.',
+    'Also check: scene consistent with the plan, credible scale, lighting integration, product visually dominant, details (zippers, hardware, texture, edges, pattern) consistent with the source.',
+    `Return exactly one assessment per candidate covering candidateIndex 0 to ${lastIndex}, each index exactly once. preferredOrder ranks candidates with usable ones first.`,
+    'repairInstruction: for each rejected candidate, one concrete Simplified-Chinese-compatible repair sentence usable for regeneration; null when the candidate is usable.',
+  );
+  if (input.humanPolicy === 'avoid') {
+    parts.push('Hard constraint: candidates showing any person, hand, body part or silhouette must fail.');
+  } else if (input.humanPolicy === 'require') {
+    parts.push('Hard constraint: candidates without meaningful human interaction must fail.');
+  }
+  return parts.join('\n');
 }
 
 /** Starts from the core Zod contract, then narrows image references to this provider request. */
@@ -141,17 +157,20 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error';
 }
 
-type LogDetail = Omit<Parameters<typeof writeAILog>[0],
-  'requestId' | 'operation' | 'workspaceId' | 'profileId' | 'driver' | 'provider' | 'model' | 'endpoint' | 'durationMs' | 'apiKey' | 'timestamp' | 'assetCount' | 'assetIds'>;
+type StructuredOperation = 'product-intelligence' | 'hero-director' | 'hero-batch-review';
 
-export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvider {
+type AttemptLogInput = Pick<AIRequestLog, 'status' | 'httpStatus' | 'durationMs'> &
+  Partial<Pick<AIRequestLog, 'failureStage' | 'errorName' | 'errorMessage' | 'requestBody' | 'responseBody' | 'parsedResult'>> &
+  { extra?: Record<string, unknown> };
+
+export class OpenAICompatibleVisionProvider implements VisionProvider {
   constructor(private readonly config: ResolvedVisionConfig) {}
 
   async analyze(input: ProductIntelligenceInput) {
     const jsonSchema = buildProductIntelligenceJsonSchema(input);
     return this.requestStructured({
       input,
-      operation: 'vision.product-analysis',
+      operation: 'product-intelligence',
       system: SYSTEM_PROMPT,
       user: userPrompt(input),
       content: input.assets.flatMap((asset) => [
@@ -164,55 +183,44 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
     });
   }
 
-  async planHero(input: HeroPlanningInput) {
-    const creativeIntent = input.creativeIntent
-      ? `\nUser creative intent (preserve it while adapting it to the visible product): ${input.creativeIntent}`
-      : '';
-    const planningInstruction = `Inspect the visible product in the supplied image before planning.\n` +
-      `Return exactly one object matching the supplied JSON Schema. The prompt must be English and propose one strongest product-specific ecommerce Hero direction.\n` +
-      `Preserve product identity, shape, proportions, color, visible material appearance, pattern, logo/text, structure, count, accessories and visible hardware.\n` +
-      `Do not invent unseen back/interior/accessories/functions or unsupported factual claims. Do not force a predefined scene, style or person taxonomy.\n` +
-      `Freely choose scene, camera, environment, lighting, spatial treatment and mood. Prioritize commercial usefulness, believable photography and low AI-looking output.${creativeIntent}`;
+  async directHero(input: HeroDirectorInput) {
     return this.requestStructured({
       input,
-      operation: 'vision.hero-planning',
-      user: planningInstruction,
+      operation: 'hero-director',
+      user: directHeroInstruction(input),
       content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.asset.buffer.toString('base64')}` } }],
-      schema: HeroRuntimePlanSchema,
-      schemaName: 'hero_runtime_plan',
+      schema: HeroBriefSchema,
+      schemaName: 'hero_brief',
     });
   }
 
-  async planHeroV2(input: HeroPlanV2Input) {
+  async reviewHeroBatch(input: HeroBatchReviewInput) {
+    const content: Array<Record<string, unknown>> = [
+      { type: 'text', text: 'Image 1: source product photo.' },
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.source.buffer.toString('base64')}` } },
+    ];
+    input.generated.forEach((image, index) => {
+      content.push({ type: 'text', text: `Candidate ${index}:` });
+      content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image.buffer.toString('base64')}` } });
+    });
     return this.requestStructured({
       input,
-      operation: 'vision.hero-plan-v2',
-      user: planHeroV2Instruction(input),
-      content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.asset.buffer.toString('base64')}` } }],
-      schema: HeroPlanV2Schema,
-      schemaName: 'hero_plan_v2',
+      operation: 'hero-batch-review',
+      user: reviewHeroBatchInstruction(input),
+      content,
+      schema: HeroBatchReviewSchema,
+      schemaName: 'hero_batch_review',
     });
   }
 
-  async reviewHero(input: HeroReviewInput) {
-    return this.requestStructured({
-      input,
-      operation: 'vision.hero-review',
-      user: reviewHeroInstruction(input),
-      content: [
-        { type: 'text', text: 'Image 1: original product photo.' },
-        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.source.buffer.toString('base64')}` } },
-        { type: 'text', text: 'Image 2: generated atmosphere hero.' },
-        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${input.generated.buffer.toString('base64')}` } },
-      ],
-      schema: HeroReviewSchema,
-      schemaName: 'hero_review',
-    });
-  }
-
+  /**
+   * 通用结构化输出请求。
+   * 每次实际 HTTP 请求一个 requestId 与一个独立日志文件；
+   * 同一逻辑操作的协议降级/重试共享一个 traceId。
+   */
   private async requestStructured<T extends z.ZodType>(options: {
-    input: ProductIntelligenceInput | HeroPlanningInput | HeroPlanV2Input | HeroReviewInput;
-    operation: 'vision.product-analysis' | 'vision.hero-planning' | 'vision.hero-plan-v2' | 'vision.hero-review';
+    input: ProductIntelligenceInput | HeroDirectorInput | HeroBatchReviewInput;
+    operation: StructuredOperation;
     system?: string;
     user: string;
     content: Array<Record<string, unknown>>;
@@ -221,21 +229,18 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
     jsonSchemaOverride?: JsonSchema;
   }): Promise<z.output<T>> {
     const { input, schema, schemaName, jsonSchemaOverride } = options;
-    const requestId = crypto.randomUUID();
-    const startedAt = new Date().toISOString();
-    const started = Date.now();
-    const assets = 'assets' in input
-      ? input.assets
-      : 'source' in input
-        ? [input.source, input.generated]
-        : [input.asset];
-    const log = (event: LogDetail & { structuredMode?: string; structuredFallback?: string }) => writeAILog({
-      ...event, requestId, operation: options.operation, workspaceId: input.workspaceId,
-      profileId: this.config.profileId, driver: this.config.driver, provider: this.config.driver,
-      model: this.config.model, endpoint: this.config.endpoint, apiKey: this.config.apiKey,
-      timestamp: startedAt, durationMs: Date.now() - started, assetCount: assets.length,
-      assetIds: assets.map((asset) => asset.assetId),
-    });
+    const traceId = crypto.randomUUID();
+    const taskId = 'taskId' in input ? input.taskId : undefined;
+    const logBase = {
+      operation: options.operation,
+      workspaceId: input.workspaceId,
+      taskId,
+      profileId: this.config.profileId,
+      driver: this.config.driver,
+      model: this.config.model,
+      endpoint: this.config.endpoint,
+      redact: [this.config.apiKey],
+    };
 
     const structuredMode = this.config.compatibility.structuredOutput;
     let modeResult = resolveStructuredMode(structuredMode, schemaName, options.schema, jsonSchemaOverride);
@@ -246,9 +251,27 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
     const maxProtocolFallback = structuredMode === 'auto' ? 2 : 0;
     let protocolFallbackCount = 0;
     let schemaRetryUsed = false;
-    let lastProtocolError: { status: number; body: string } | null = null;
 
     while (true) {
+      const requestId = crypto.randomUUID();
+      const started = Date.now();
+      const logAttempt = (event: AttemptLogInput) => writeAIRequestLog({
+        timestamp: new Date().toISOString(),
+        requestId,
+        traceId,
+        ...logBase,
+        status: event.status,
+        httpStatus: event.httpStatus,
+        durationMs: event.durationMs,
+        ...(event.failureStage ? { failureStage: event.failureStage } : {}),
+        ...(event.errorName ? { errorName: event.errorName } : {}),
+        ...(event.errorMessage !== undefined ? { errorMessage: event.errorMessage } : {}),
+        ...(event.requestBody !== undefined ? { requestBody: event.requestBody } : {}),
+        ...(event.responseBody !== undefined ? { responseBody: event.responseBody } : {}),
+        ...(event.parsedResult !== undefined ? { parsedResult: event.parsedResult } : {}),
+        ...(event.extra ? { extra: event.extra } : {}),
+      });
+
       const systemPrompt = [options.system, modeResult.systemSuffix].filter(Boolean).join('\n');
       const content = [...options.content, { type: 'text', text: options.user }];
       const body = {
@@ -269,7 +292,12 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
           signal: AbortSignal.timeout(120_000),
         });
       } catch (error) {
-        await log({ status: 'failed', failureStage: 'fetch', errorName: error instanceof Error ? error.name : undefined, errorMessage: errorMessage(error), structuredMode: modeResult.mode });
+        await logAttempt({
+          status: 'failed', durationMs: Date.now() - started,
+          failureStage: 'fetch', requestBody: body,
+          errorName: error instanceof Error ? error.name : undefined, errorMessage: errorMessage(error),
+          extra: { structuredMode: modeResult.mode },
+        });
         throw providerFetchError(error);
       }
 
@@ -281,13 +309,20 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
           const nextMode = downgradeMode(modeResult.mode);
           if (nextMode && protocolFallbackCount < maxProtocolFallback) {
             protocolFallbackCount += 1;
-            lastProtocolError = { status: response.status, body: responseRaw };
+            await logAttempt({
+              status: 'failed', durationMs: Date.now() - started,
+              failureStage: 'http', httpStatus: response.status, requestBody: body, responseBody: responseRaw,
+              extra: { structuredMode: modeResult.mode, structuredFallback: nextMode },
+            });
             modeResult = resolveStructuredMode(nextMode, schemaName, options.schema, jsonSchemaOverride);
-            await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet: responseRaw, structuredMode: modeResult.mode, structuredFallback: nextMode });
             continue;
           }
         }
-        await log({ status: 'failed', failureStage: 'http', httpStatus: response.status, responseSnippet: responseRaw, structuredMode: modeResult.mode });
+        await logAttempt({
+          status: 'failed', durationMs: Date.now() - started,
+          failureStage: 'http', httpStatus: response.status, requestBody: body, responseBody: responseRaw,
+          extra: { structuredMode: modeResult.mode },
+        });
         console.error(`[ai] ${options.operation} failed requestId=${requestId.slice(0, 8)}`);
         throw providerHttpError(response.status);
       }
@@ -296,13 +331,21 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
       let parsedBody: unknown;
       try { parsedBody = JSON.parse(responseRaw); }
       catch {
-        await log({ status: 'failed', failureStage: 'response-json', httpStatus: response.status, responseSnippet: responseRaw, structuredMode: modeResult.mode });
+        await logAttempt({
+          status: 'failed', durationMs: Date.now() - started,
+          failureStage: 'response-json', httpStatus: response.status, requestBody: body, responseBody: responseRaw,
+          extra: { structuredMode: modeResult.mode },
+        });
         throw invalidProviderResponse(requestId);
       }
       const choices = (parsedBody as { choices?: Array<{ message?: { content?: unknown } }> })?.choices;
       const raw = extractTextContent(choices?.[0]?.message?.content).trim();
       if (!raw) {
-        await log({ status: 'failed', failureStage: 'content-extract', httpStatus: response.status, usage: extractResponseUsage(parsedBody), structuredMode: modeResult.mode });
+        await logAttempt({
+          status: 'failed', durationMs: Date.now() - started,
+          failureStage: 'content-extract', httpStatus: response.status, requestBody: body, responseBody: parsedBody,
+          extra: { structuredMode: modeResult.mode, usage: extractResponseUsage(parsedBody) },
+        });
         throw invalidProviderResponse(requestId);
       }
 
@@ -310,17 +353,30 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
       try {
         parsed = modeResult.mode === 'text-json' ? parseRawJson(raw) : JSON.parse(raw);
       } catch {
-        await log({ status: 'failed', failureStage: 'content-json-parse', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, structuredMode: modeResult.mode });
+        await logAttempt({
+          status: 'failed', durationMs: Date.now() - started,
+          failureStage: 'content-json-parse', httpStatus: response.status, requestBody: body, responseBody: parsedBody,
+          extra: { structuredMode: modeResult.mode, usage: extractResponseUsage(parsedBody), responseSnippet: raw.slice(0, 2000) },
+        });
         throw invalidProviderResponse(requestId);
       }
 
       const normalized = normalizeStructuredPayload(parsed, schema);
       if (normalized.success) {
-        await log({ status: 'succeeded', httpStatus: response.status, usage: extractResponseUsage(parsedBody), normalization: normalized.normalization, structuredMode: modeResult.mode });
+        await logAttempt({
+          status: 'succeeded', durationMs: Date.now() - started,
+          httpStatus: response.status, requestBody: body, responseBody: parsedBody, parsedResult: normalized.data,
+          extra: {
+            structuredMode: modeResult.mode,
+            usage: extractResponseUsage(parsedBody),
+            ...(normalized.normalization ? { normalization: normalized.normalization } : {}),
+          },
+        });
         return normalized.data;
       }
 
       // Schema validation failed — one retry allowed across the entire request
+      const zodIssueList = zodIssues(normalized.error);
       if (!schemaRetryUsed) {
         schemaRetryUsed = true;
         if (structuredMode === 'auto' && modeResult.mode !== 'text-json') {
@@ -329,11 +385,19 @@ export class OpenAICompatibleVisionProvider implements ProductIntelligenceProvid
             modeResult = resolveStructuredMode(nextMode, schemaName, options.schema, jsonSchemaOverride);
           }
         }
-        await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, zodIssues: zodIssues(normalized.error), structuredMode: modeResult.mode, structuredFallback: 'schema-retry' });
+        await logAttempt({
+          status: 'failed', durationMs: Date.now() - started,
+          failureStage: 'schema-validate', httpStatus: response.status, requestBody: body, responseBody: parsedBody,
+          extra: { structuredMode: modeResult.mode, usage: extractResponseUsage(parsedBody), responseSnippet: raw.slice(0, 2000), zodIssues: zodIssueList, structuredFallback: 'schema-retry' },
+        });
         continue;
       }
 
-      await log({ status: 'failed', failureStage: 'schema-validate', httpStatus: response.status, usage: extractResponseUsage(parsedBody), responseSnippet: raw, zodIssues: zodIssues(normalized.error), structuredMode: modeResult.mode });
+      await logAttempt({
+        status: 'failed', durationMs: Date.now() - started,
+        failureStage: 'schema-validate', httpStatus: response.status, requestBody: body, responseBody: parsedBody,
+        extra: { structuredMode: modeResult.mode, usage: extractResponseUsage(parsedBody), responseSnippet: raw.slice(0, 2000), zodIssues: zodIssueList },
+      });
       throw invalidProviderResponse(requestId);
     }
 

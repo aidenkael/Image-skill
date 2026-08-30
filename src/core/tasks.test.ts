@@ -9,9 +9,7 @@ const validHero = {
   options: {
     sourceAssetId: 'a1',
     ratio: '1:1',
-    creativeMode: 'recommended',
     humanPresence: 'auto',
-    planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
   },
 };
 
@@ -102,51 +100,57 @@ describe('任务请求校验（count 按任务类型限制）', () => {
     ).toThrow(/只能提交一张/);
   });
 
-  it('Hero 创作模式按需校验，推荐模式不依赖分析字段', () => {
+  it('Hero 选项简化：不再需要 planId，创作要求为可选字符串', () => {
     expect(validateCreateTaskRequest(validHero, ctx).options).toMatchObject({
-      creativeMode: 'recommended',
+      sourceAssetId: 'a1',
+      ratio: '1:1',
       humanPresence: 'auto',
-      creativeLevel: 'balanced',
     });
-    expect(() => validateCreateTaskRequest({
-      ...validHero,
-      options: { ...validHero.options, creativeMode: 'custom', creativeIntent: '  ' },
-    }, ctx)).toThrow(/请填写你的创作想法/);
+    expect(validateCreateTaskRequest(validHero, ctx).options).not.toHaveProperty('planId');
     expect(validateCreateTaskRequest({
       ...validHero,
-      options: { ...validHero.options, creativeMode: 'custom', creativeIntent: '雨夜故事感' },
-    }, ctx).kind).toBe('hero');
+      options: { ...validHero.options, creativeIntent: '雨夜故事感' },
+    }, ctx).options).toMatchObject({ creativeIntent: '雨夜故事感' });
   });
 
-  it('历史 Hero 选项值被归一化：free→recommended、none→avoid、involved→require', () => {
-    expect(validateCreateTaskRequest({
-      ...validHero,
-      options: { ...validHero.options, creativeMode: 'free' },
-    }, ctx).options).toMatchObject({ creativeMode: 'recommended', creativeLevel: 'balanced' });
+  it('历史 Hero 选项值被迁移：none→avoid、involved→require，并丢弃废弃字段', () => {
     expect(validateCreateTaskRequest({
       ...validHero,
       options: { ...validHero.options, humanPresence: 'none' },
     }, ctx).options).toMatchObject({ humanPresence: 'avoid' });
     expect(validateCreateTaskRequest({
       ...validHero,
-      options: { ...validHero.options, creativeMode: 'concept', conceptId: 'hero-1', humanPresence: 'involved' },
-    }, ctx).options).toMatchObject({ creativeMode: 'recommended', humanPresence: 'require' });
+      options: { ...validHero.options, humanPresence: 'involved' },
+    }, ctx).options).toMatchObject({ humanPresence: 'require' });
   });
 
-  it('creativeLevel 三档受控，非法档位被拒绝', () => {
-    for (const level of ['conservative', 'balanced', 'creative']) {
-      expect(validateCreateTaskRequest({
-        ...validHero,
-        options: { ...validHero.options, creativeLevel: level },
-      }, ctx).options).toMatchObject({ creativeLevel: level });
-    }
-    expect(() => validateCreateTaskRequest({
+  it('旧草稿携带 planId/creativeLevel/creativeMode 仍可加载且废弃字段被丢弃，旧字符串创作要求保留', () => {
+    const parsed = validateCreateTaskRequest({
       ...validHero,
-      options: { ...validHero.options, creativeLevel: 'wild' },
-    }, ctx)).toThrow(TaskValidationError);
+      options: {
+        sourceAssetId: 'a1',
+        ratio: '3:4',
+        humanPresence: 'auto',
+        creativeMode: 'custom',
+        creativeLevel: 'creative',
+        planId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        conceptId: 'hero-1',
+        creativeIntent: '雨夜归家',
+      },
+    }, ctx);
+    expect(parsed.options).toEqual({
+      sourceAssetId: 'a1',
+      ratio: '3:4',
+      humanPresence: 'auto',
+      creativeIntent: '雨夜归家',
+    });
+    expect(parsed.options).not.toHaveProperty('planId');
+    expect(parsed.options).not.toHaveProperty('creativeMode');
+    expect(parsed.options).not.toHaveProperty('creativeLevel');
+    expect(parsed.options).not.toHaveProperty('conceptId');
   });
 
-  it('旧 scene/person/conceptId 字段不会进入活动 Hero 选项', () => {
+  it('旧 scene/person 字段不会进入活动 Hero 选项', () => {
     const parsed = validateCreateTaskRequest({
       ...validHero,
       options: {

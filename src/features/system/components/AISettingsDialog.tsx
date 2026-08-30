@@ -258,9 +258,11 @@ export function AISettingsDialog(props: Props) {
             />
 
             {validationError ? <div className="validation-hint">{validationError}</div> : null}
-            <div className="dialog-actions"><button type="button" className="btn btn-primary" disabled={busy || Boolean(validationError)} onClick={() => void save()}>{busy ? '处理中…' : '保存配置'}</button></div>
-            {message ? <div className="status-notice">{message}</div> : null}
-            {error ? <div className="status-error">{error}</div> : null}
+            <div className="settings-editor-footer">
+              <div className="dialog-actions"><button type="button" className="btn btn-primary" disabled={busy || Boolean(validationError)} onClick={() => void save()}>{busy ? '处理中…' : '保存配置'}</button></div>
+              {message ? <div className="status-notice">{message}</div> : null}
+              {error ? <div className="status-error">{error}</div> : null}
+            </div>
           </div>
         </div>
       </section>
